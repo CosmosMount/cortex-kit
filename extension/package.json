@@ -12,6 +12,7 @@
   "bugs": {
     "url": "https://github.com/CosmosMount/cortex-kit/issues"
   },
+  "icon": "resources/cortex-kit-icon.png",
   "engines": { "vscode": "^1.96.0" },
   "categories": ["Debuggers", "Visualization"],
   "activationEvents": [
