@@ -1,0 +1,147 @@
+{
+  "name": "cortex-kit",
+  "displayName": "Cortex Kit",
+  "description": "Native Cortex-M debugging, peripheral inspection, plotting and FFT through probe-rs.",
+  "version": "0.1.0",
+  "publisher": "cortex-kit",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CosmosMount/cortex-kit.git"
+  },
+  "homepage": "https://github.com/CosmosMount/cortex-kit#readme",
+  "bugs": {
+    "url": "https://github.com/CosmosMount/cortex-kit/issues"
+  },
+  "engines": { "vscode": "^1.96.0" },
+  "categories": ["Debuggers", "Visualization"],
+  "activationEvents": [
+    "onDebug:cortex-kit",
+    "onView:cortexKit.liveWatch",
+    "onView:cortexKit.variables",
+    "onView:cortexKit.peripherals",
+    "onView:cortexKit.session",
+    "onView:cortexKit.plots",
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "files": ["out/*.js", "media", "resources", "bin", "README.md", "package.json"],
+  "scripts": {
+    "build": "npm run compile",
+    "compile": "tsc -p . && node scripts/copy-webview.mjs",
+    "build:backend:release": "node scripts/build-backend.mjs --release",
+    "bundle:backend": "node scripts/copy-backend.mjs",
+    "copy:readme": "node scripts/copy-readme.mjs",
+    "prepare:package": "npm run compile && npm run build:backend:release && npm run bundle:backend -- --release && npm run copy:readme",
+    "vscode:prepublish": "npm run prepare:package",
+    "watch": "tsc -watch -p .",
+    "test": "npm run compile && node --test out/test/*.test.js",
+    "test:dap": "node --test ../tests/mock-dap-smoke.mjs",
+    "package": "vsce package --target win32-x64 --out ../cortex-kit-win32-x64.vsix",
+    "publish:marketplace": "vsce publish --target win32-x64"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^3.6.2",
+    "typescript": "^5.7.2"
+  },
+  "contributes": {
+    "debuggers": [{
+      "type": "cortex-kit",
+      "label": "Cortex Kit",
+      "languages": ["c", "cpp", "rust", "asm"],
+      "configurationAttributes": {
+        "launch": { "required": ["chip"], "properties": {
+          "chip": { "type": "string", "description": "Exact probe-rs target name" },
+          "programBinary": { "type": "string", "description": "ELF, AXF, HEX, BIN or UF2 image" },
+          "mockProbe": { "type": "boolean", "default": false },
+          "probe": {
+            "type": "object",
+            "properties": {
+              "selector": { "type": "string", "default": "auto", "description": "Probe selector reported by Cortex Kit, or auto" },
+              "protocol": { "type": "string", "enum": ["swd", "jtag"], "default": "swd" },
+              "speedKHz": { "type": "integer", "minimum": 1, "default": 10000, "description": "Debug clock in kHz" },
+              "connectUnderReset": { "type": "boolean", "default": false, "description": "Assert the hardware reset pin while attaching; use when a running target prevents a normal debug connection" }
+            }
+          }, "flashing": { "type": "object" }, "acquisition": { "type": "object" }, "svdFile": { "type": ["string", "null"] }
+        }},
+        "attach": { "required": ["chip"], "properties": { "chip": { "type": "string" }, "probe": {
+          "type": "object",
+          "properties": {
+            "selector": { "type": "string", "default": "auto", "description": "Probe selector reported by Cortex Kit, or auto" },
+            "protocol": { "type": "string", "enum": ["swd", "jtag"], "default": "swd" },
+            "speedKHz": { "type": "integer", "minimum": 1, "default": 10000, "description": "Debug clock in kHz" },
+            "connectUnderReset": { "type": "boolean", "default": false, "description": "Assert the hardware reset pin while attaching; use when a running target prevents a normal debug connection" }
+          }
+        }, "programBinary": { "type": "string" }, "plotOnly": { "type": "boolean", "default": false, "description": "Protected live plotting mode: allow pause/continue and typed Live Watch writes, but do not reset, flash, perform arbitrary memory writes, or install breakpoints" }, "svdFile": { "type": ["string", "null"] } } }
+      },
+      "initialConfigurations": [
+        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Mock Debug", "chip": "Cortex-M Mock", "mockProbe": true, "stopOnEntry": true, "acquisition": { "requestedSamplesPerSecond": 1000 } },
+        { "type": "cortex-kit", "request": "attach", "name": "Cortex Kit: Live Plot (Attach)", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "plotOnly": true, "stopOnEntry": false, "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 4000, "connectUnderReset": false }, "flashing": { "enabled": false, "verify": false, "resetAfter": false }, "acquisition": { "requestedSamplesPerSecond": 1000, "maxBurstMs": 2, "historySeconds": 30 } },
+        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Flash & Debug", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 10000, "connectUnderReset": false }, "flashing": { "enabled": true, "verify": true, "resetAfter": true }, "acquisition": { "requestedSamplesPerSecond": 5000, "maxBurstMs": 2, "historySeconds": 30 } }
+      ]
+    }],
+    "viewsContainers": { "panel": [{ "id": "cortex-kit-panel", "title": "Cortex Kit", "icon": "resources/cortex-kit.svg" }] },
+    "views": {
+      "debug": [
+        { "id": "cortexKit.liveWatch", "name": "Cortex Kit Live Watch" },
+        { "id": "cortexKit.variables", "name": "Cortex Kit Variables" },
+        { "id": "cortexKit.peripherals", "name": "Cortex Kit Peripherals" },
+        { "id": "cortexKit.session", "name": "Cortex Kit Session" }
+      ],
+      "cortex-kit-panel": [{ "id": "cortexKit.plots", "name": "Plots", "type": "webview" }]
+    },
+    "commands": [
+      { "command": "cortexKit.configureProject", "title": "Cortex Kit: Configure Project" },
+      { "command": "cortexKit.importCortexDebug", "title": "Cortex Kit: Import Cortex-Debug Configuration" },
+      { "command": "cortexKit.mockDebug", "title": "Cortex Kit: Mock Debug" },
+      { "command": "cortexKit.flash", "title": "Cortex Kit: Flash" },
+      { "command": "cortexKit.benchmark", "title": "Cortex Kit: Run Acquisition Benchmark" },
+      { "command": "cortexKit.refresh", "title": "Cortex Kit: Refresh Views", "icon": "$(refresh)" },
+      { "command": "cortexKit.searchVariables", "title": "Cortex Kit: Search Global Variables", "icon": "$(search)" },
+      { "command": "cortexKit.selectSvd", "title": "Cortex Kit: Select SVD File", "icon": "$(file-code)" },
+      { "command": "cortexKit.addLiveWatch", "title": "Cortex Kit: Add Live Watch Variable", "icon": "$(add)" },
+      { "command": "cortexKit.addVariableToLiveWatch", "title": "Add to Live Watch", "icon": "$(eye)" },
+      { "command": "cortexKit.removeLiveWatch", "title": "Remove from Live Watch", "icon": "$(close)" },
+      { "command": "cortexKit.clearLiveWatch", "title": "Clear Live Watch", "icon": "$(clear-all)" },
+      { "command": "cortexKit.writeLiveWatch", "title": "Write Live Watch Value", "icon": "$(edit)" },
+      { "command": "cortexKit.refreshLiveWatch", "title": "Refresh Live Watch", "icon": "$(refresh)" },
+      { "command": "cortexKit.addLiveWatchToPlot", "title": "Add Live Watch Variable to Plot", "icon": "$(graph)" },
+      { "command": "cortexKit.addVariableToPlot", "title": "Add to Plot", "icon": "$(graph)" },
+      { "command": "cortexKit.addChart", "title": "Add Chart", "icon": "$(add)" },
+      { "command": "cortexKit.openPlots", "title": "Cortex Kit: Open Plots" },
+      { "command": "cortexKit.readRegister", "title": "Read Register" },
+      { "command": "cortexKit.writeRegister", "title": "Write Register" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "cortexKit.addLiveWatch", "when": "view == cortexKit.liveWatch", "group": "navigation@1" },
+        { "command": "cortexKit.refreshLiveWatch", "when": "view == cortexKit.liveWatch", "group": "navigation@2" },
+        { "command": "cortexKit.clearLiveWatch", "when": "view == cortexKit.liveWatch", "group": "navigation@3" },
+        { "command": "cortexKit.searchVariables", "when": "view == cortexKit.variables", "group": "navigation@1" },
+        { "command": "cortexKit.selectSvd", "when": "view == cortexKit.peripherals", "group": "navigation@1" },
+        { "command": "cortexKit.refresh", "when": "view == cortexKit.variables || view == cortexKit.peripherals || view == cortexKit.session", "group": "navigation" },
+        { "command": "cortexKit.addChart", "when": "view == cortexKit.plots", "group": "navigation" }
+      ],
+      "view/item/context": [
+        { "command": "cortexKit.writeLiveWatch", "when": "view == cortexKit.liveWatch && viewItem == cortexKit.liveWatchWritable", "group": "inline@1" },
+        { "command": "cortexKit.removeLiveWatch", "when": "view == cortexKit.liveWatch && (viewItem == cortexKit.liveWatchWritable || viewItem == cortexKit.liveWatchReadOnly)", "group": "inline@2" },
+        { "command": "cortexKit.addLiveWatchToPlot", "when": "view == cortexKit.liveWatch && (viewItem == cortexKit.liveWatchWritable || viewItem == cortexKit.liveWatchReadOnly)", "group": "navigation@1" },
+        { "command": "cortexKit.addVariableToLiveWatch", "when": "view == cortexKit.variables && (viewItem == cortexKit.variable || viewItem == cortexKit.variableGroup)", "group": "inline@1" },
+        { "command": "cortexKit.addVariableToPlot", "when": "view == cortexKit.variables && (viewItem == cortexKit.variable || viewItem == cortexKit.variableGroup)", "group": "inline@2" },
+        { "command": "cortexKit.readRegister", "when": "view == cortexKit.peripherals && (viewItem == cortexKit.registerWritable || viewItem == cortexKit.registerReadOnly)", "group": "inline" },
+        { "command": "cortexKit.writeRegister", "when": "view == cortexKit.peripherals && viewItem == cortexKit.registerWritable", "group": "navigation" }
+      ]
+    },
+    "configuration": {
+      "title": "Cortex Kit",
+      "properties": {
+        "cortexKit.backendPath": { "type": "string", "default": "", "description": "Optional path to cortex-kit-dap executable" },
+        "cortexKit.chartRefreshRate": { "type": "number", "default": 30, "minimum": 1, "maximum": 60 },
+        "cortexKit.liveWatchSamplesPerSecond": { "type": "number", "default": 20, "minimum": 1, "maximum": 1000, "description": "Requested target sample rate when only Live Watch variables are active" },
+        "cortexKit.liveWatchRefreshRate": { "type": "number", "default": 10, "minimum": 1, "maximum": 30, "description": "Maximum Live Watch tree refresh rate in frames per second" },
+        "cortexKit.historySeconds": { "type": "number", "default": 30, "minimum": 1, "maximum": 600 }
+      }
+    }
+  }
+}

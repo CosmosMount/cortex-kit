@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Rust backend",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/cargo.ps1", "build", "--package", "cortex-kit-dap"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build extension",
+      "type": "npm",
+      "script": "compile",
+      "path": "extension",
+      "group": "build",
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Build Cortex Kit",
+      "dependsOrder": "parallel",
+      "dependsOn": ["Build Rust backend", "Build extension"],
+      "group": { "kind": "build", "isDefault": true }
+    }
+  ]
+}
