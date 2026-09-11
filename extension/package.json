@@ -3,7 +3,7 @@
   "displayName": "Cortex Kit",
   "description": "Native Cortex-M debugging, peripheral inspection, plotting and FFT through probe-rs.",
   "version": "0.1.0",
-  "publisher": "cortex-kit",
+  "publisher": "CosmosMount",
   "repository": {
     "type": "git",
     "url": "https://github.com/CosmosMount/cortex-kit.git"
