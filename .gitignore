@@ -1,0 +1,12 @@
+/target/
+/.tooling/
+/.tmp/
+/extension/node_modules/
+/extension/out/
+/extension/bin/
+/extension/media/
+/extension/README.md
+/.vscode-test*/
+*.vsix
+*.log
+.DS_Store

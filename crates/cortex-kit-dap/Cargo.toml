@@ -1,0 +1,17 @@
+[package]
+name = "cortex-kit-dap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+cortex-kit-core = { path = "../cortex-kit-core" }
+cortex-kit-probe = { path = "../cortex-kit-probe" }
+crossbeam-channel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "cortex-kit-dap"
+path = "src/main.rs"

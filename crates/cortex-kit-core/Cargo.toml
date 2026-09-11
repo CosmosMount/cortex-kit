@@ -1,0 +1,14 @@
+[package]
+name = "cortex-kit-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+crossbeam-queue.workspace = true
+gimli.workspace = true
+object.workspace = true
+serde.workspace = true
+svd-parser.workspace = true
+thiserror.workspace = true

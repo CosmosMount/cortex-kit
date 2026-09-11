@@ -1,0 +1,17 @@
+[package]
+name = "cortex-kit-probe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["hardware"]
+hardware = ["dep:probe-rs"]
+
+[dependencies]
+anyhow.workspace = true
+cortex-kit-core = { path = "../cortex-kit-core" }
+crossbeam-channel.workspace = true
+probe-rs = { workspace = true, optional = true }
+probe-rs-debug.workspace = true
+serde.workspace = true
