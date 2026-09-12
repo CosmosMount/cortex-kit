@@ -6,6 +6,8 @@
 /extension/bin/
 /extension/media/
 /extension/README.md
+/extension/CHANGELOG.md
+/extension/LICENSE
 /.vscode-test*/
 *.vsix
 *.log

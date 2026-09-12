@@ -1,237 +1,157 @@
 # Cortex Kit
 
-Cortex Kit is a VS Code extension for Cortex-M debugging, live variable inspection, peripheral registers, multi-chart plotting, FFT analysis, and firmware flashing. A Rust debug adapter talks directly to ST-Link and CMSIS-DAP/DAPLink through [`probe-rs`](https://probe.rs/). OpenOCD and GDB are not runtime dependencies.
+在 VS Code 中连接 Cortex-M，查看实时变量、绘制时域 / FFT 曲线、持续记录 CSV，并完成固件烧录和基础调试。
 
-The current release is a Windows x64 prototype. ST-Link has been tested on an STM32H723VGT6 running an existing application. CMSIS-DAP/DAPLink uses the same `probe-rs` backend but still needs broader physical-probe coverage.
+Cortex Kit 通过 Rust 后端和 [probe-rs](https://probe.rs/) 直接访问 ST-Link、DAPLink / CMSIS-DAP，无需配置 OpenOCD 或 GDB Server。当前发布包适用于 **Windows x64、VS Code 1.96 及以上版本**，仍处于早期版本阶段。
 
-## Features
+## 安装
 
-- Standard VS Code debug sessions with launch, attach, pause, continue, reset, instruction/source breakpoints, hardware stepping, CPU registers, memory access, and source navigation.
-- Global and static variables indexed from ELF/AXF DWARF before a debug session starts.
-- Native **Cortex Kit Variables**, **Live Watch**, **Peripherals**, and **Session** views.
-- Typed Live Watch edits with automatic pause, write, probe flush, hardware readback, and automatic resume.
-- Structure and array selection: selecting a container recursively adds its addressable scalar leaves; selecting individual fields remains supported.
-- Multiple time-domain and FFT charts, shared variables, expressions, linked cursor, persistent layouts, drag-to-reorder, and auto-grid, side-by-side, or stacked arrangement.
-- A binary loopback sample channel separated from DAP control traffic.
-- Deduplicated block reads when the same variable appears in several charts or Live Watch.
-- CMSIS-SVD peripheral, register, and bit-field inspection.
-- ELF/AXF/OUT, Intel HEX, BIN, and UF2 flashing.
-- Probe, `probe-rs` target, firmware image, SVD, build-task, and Arm GNU toolchain discovery.
-- A deterministic Mock Probe for development without hardware.
-
-Real DWARF stack unwinding and frame locals, source-aware step-over/step-out, real disassembly, complete CMSIS-Pack discovery, and physical DAPLink validation are still in progress. See [Implementation status](docs/IMPLEMENTATION_STATUS.md) for the exact boundary.
-
-## How it is organized
-
-```text
-cortex-kit/
-├── crates/
-│   ├── cortex-kit-core/   # ELF/DWARF, SVD, expressions, FFT, protocol models
-│   ├── cortex-kit-probe/  # single-owner ProbeWorker and probe-rs backend
-│   └── cortex-kit-dap/    # DAP stdio server and binary sample service
-├── extension/             # VS Code TypeScript extension
-├── webview-ui/            # themed Plot panel
-├── tests/                 # Mock and physical-hardware smoke tests
-└── docs/
-```
-
-All probe access is serialized through one Worker. Adding or removing an active variable subscription briefly pauses a running target, updates the subscription, and resumes it. Layout-only changes do not touch the target. See [Architecture](docs/ARCHITECTURE.md) for protocol and state details.
-
-## Install a packaged build
-
-Download or build `cortex-kit-win32-x64.vsix`, then either use **Extensions: Install from VSIX...** in VS Code or run:
+获取 `cortex-kit-win32-x64.vsix` 后，在 VS Code 命令面板中执行 **Extensions: Install from VSIX...**，或运行：
 
 ```powershell
 code --install-extension .\cortex-kit-win32-x64.vsix
 ```
 
-Reload the VS Code window after replacing an already-running development build.
+更新已运行的版本后执行 **Developer: Reload Window**。插件会同时安装 CMake Tools 和 C/C++ 扩展；已有 ELF / AXF 时，无需安装编译器即可连接和查看变量。需要编译时，再安装项目使用的 CMake、Ninja 等构建工具和 Arm 编译器。
 
-## Configure a firmware workspace
+## 第一次连接
 
-An existing ELF or AXF with DWARF information is enough for variable discovery and debugging. Cortex Kit delegates firmware compilation to CMake Tools and does not require the Arm GNU toolchain when the image already exists.
+1. 在 VS Code 打开固件工程文件夹，准备与板上固件一致、包含 DWARF 调试信息的 ELF / AXF 文件。
+2. 将探针连接到目标板。SWD 通常需要 GND、SWDIO、SWCLK，以及探针要求的参考电压连接；目标板需要供电。
+3. 执行 **Cortex Kit: Configure Project**，按向导选择芯片、固件和探针。芯片名使用向导中的 probe-rs 目标名，例如 STM32H723VGT6 对应已验证的 `STM32H723VG`。
+4. 手动选择 **ST-Link** 或 **DAPLink / CMSIS-DAP**，绑定扫描到的设备，选择 SWD / JTAG、调试时钟和采样频率。典型 SWD 连接可先使用 **10000 kHz** 和 **Normal connection**。
+5. 在“运行和调试”中选择 **Cortex Kit: Live Plot (Attach)**，按 **F5** 连接正在运行的固件。需要烧录时选择 **Cortex Kit: Flash & Debug**。
+6. 从 **Cortex Kit Variables** 添加变量到 **Live Watch**，在底部 **Plot** 中添加图表及变量，即可观察数据。
 
-Run **Cortex Kit: Configure Project**, or add configurations such as:
+向导会保存 `.vscode/launch.json`。再次运行 Configure Project 会替换已有 Cortex Kit 配置，保留其他调试器的配置；只修改探针或速率时，请使用下面的 Configure Probe / Sampling。
+
+## 选择、绑定和切换探针
+
+已有项目可执行 **Cortex Kit: Select ST-Link / DAPLink and Connect**，或点击 **Session / Live Watch** 标题栏的插头按钮：
+
+- 先选择探针类型。只有一个匹配设备时自动绑定；多个设备时按序列号选择；没有设备时可连接后点击 **Retry**，不会自动改用另一类探针。
+- 选择目标配置后，将设备的准确 selector 保存到该配置，并以 Live Plot attach 模式连接。连接时跳过构建、烧录和连接复位；保存的配置仍保留原来的启动行为。
+- 取消选择不会写入配置。切换探针前先结束当前 Cortex Kit 会话；无法区分的重复 selector 需要先断开多余设备。
+
+执行 **Cortex Kit: Configure Probe / Sampling** 可修改已有配置的探针、协议、时钟、连接方式和请求采样率，同时保留芯片、固件、SVD 等配置。
+
+**DAPLink 已通过 CMSIS-DAP 后端接入。** Horco CMSIS-DAP 已在 STM32H723VG / wbr_2026 上验证连接、采样、暂停和继续；尚未验证所有 DAPLink 固件和 DAPLink 烧录。ST-Link 已验证连接、采样、烧录与校验。更多实测见 [DAPLink 测试记录](docs/DAPLINK_2026-09-12.md)。
+
+### 手动配置示例
+
+下面的 attach 配置适合查看板上已有固件。修改芯片和 ELF 路径；多探针场景建议通过上述命令绑定准确设备。
 
 ```jsonc
 {
   "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "Cortex Kit: Live Plot (Attach)",
-      "type": "cortex-kit",
-      "request": "attach",
-      "cwd": "${workspaceFolder}",
-      "chip": "STM32H723VG",
-      "programBinary": "${workspaceFolder}/build/Debug/firmware.elf",
-      "plotOnly": true,
-      "stopOnEntry": false,
-      "probe": {
-        "selector": "auto",
-        "protocol": "swd",
-        "speedKHz": 10000,
-        "connectUnderReset": false
-      },
-      "flashing": {
-        "enabled": false,
-        "verify": false,
-        "resetAfter": false
-      },
-      "acquisition": {
-        "requestedSamplesPerSecond": 1000,
-        "maxBurstMs": 2,
-        "historySeconds": 30
-      },
-      "svdFile": "${workspaceFolder}/STM32H723.svd"
+  "configurations": [{
+    "name": "Cortex Kit: Live Plot (Attach)",
+    "type": "cortex-kit",
+    "request": "attach",
+    "cwd": "${workspaceFolder}",
+    "chip": "STM32H723VG",
+    "programBinary": "${workspaceFolder}/build/Debug/firmware.elf",
+    "plotOnly": true,
+    "stopOnEntry": false,
+    "probe": {
+      "selector": "auto",
+      "protocol": "swd",
+      "speedKHz": 10000,
+      "connectUnderReset": false
     },
-    {
-      "name": "Cortex Kit: Flash & Debug",
-      "type": "cortex-kit",
-      "request": "launch",
-      "cwd": "${workspaceFolder}",
-      "chip": "STM32H723VG",
-      "programBinary": "${workspaceFolder}/build/Debug/firmware.elf",
-      "probe": {
-        "selector": "auto",
-        "protocol": "swd",
-        "speedKHz": 10000
-      },
-      "flashing": {
-        "enabled": true,
-        "verify": true,
-        "resetAfter": true
-      },
-      "acquisition": {
-        "requestedSamplesPerSecond": 5000,
-        "maxBurstMs": 2,
-        "historySeconds": 30
-      },
-      "svdFile": "${workspaceFolder}/STM32H723.svd"
-    }
-  ]
+    "flashing": { "enabled": false, "verify": false, "resetAfter": false },
+    "acquisition": { "requestedSamplesPerSecond": 100000, "maxBurstMs": 2, "historySeconds": 30 }
+  }]
 }
 ```
 
-Use the exact target name shown by the `probe-rs` registry. For STM32H723VGT6, the tested registry entry is `STM32H723VG`. Set `probe.selector` to a selector reported by the configuration wizard when more than one probe is connected.
+## Live Watch 与变量修改
 
-Assembly (`.s`) and linker-script (`.ld`) files do not contain the peripheral register description. Set `svdFile` to a CMSIS-SVD `.svd` file or run **Cortex Kit: Select SVD File**.
+插件会在连接前从 ELF 索引全局 / 静态变量、结构体和数组。通过变量旁的眼睛按钮或 **Cortex Kit: Add Live Watch Variable** 添加监视项；选择整个结构体或数组会递归加入支持的标量成员。
 
-## Use Live Watch and Plot
+点击 Live Watch 中可写变量的铅笔按钮即可修改值。插件会按类型校验输入、暂停目标、写入并回读校验，然后恢复之前的运行状态。增加或删除采集变量也可能短暂暂停目标；仅调整图表布局不会触发暂停。
 
-1. Open **Run and Debug**. Cortex Kit indexes globals, structures, arrays, and fields from the configured ELF before the probe is connected.
-2. Use **Cortex Kit: Add Live Watch Variable** or the eye action beside a Variables node. Selecting a structure or array adds every supported scalar descendant.
-3. Start **Live Plot (Attach)** to inspect a running application without flashing, or **Flash & Debug** to build through an existing `preLaunchTask`, flash, verify, reset, and debug.
-4. Use the pencil action on a writable Live Watch item. Cortex Kit automatically pauses, performs a typed write and hardware readback, then restores the previous running state.
-5. Open the bottom **Plot** panel. Each chart has **+ Variable**, time/FFT mode, and a drag handle. Choose **Auto grid**, **Side by side**, or **Stacked** in the Plot header.
+Live Plot 模式允许主动暂停 / 继续和上述变量写入，禁止烧录、复位、单步、任意内存写入及安装断点。
 
-Plot-only mode allows explicit pause/continue and typed Live Watch writes. It rejects flashing, reset, stepping, arbitrary memory writes, and breakpoint installation.
+## Plot：实时曲线、时间窗口与图片导出
 
-## Develop and test
+在底部 **Plot** 点击 **Add chart**，通过 **+ Variable** 添加变量。图表支持 Time、FFT、Time + FFT，以及表达式、联动光标和拖动排序。顶部可切换网格、横排或竖排布局。
 
-Required development tools:
+**时间窗口**可选 5 / 10 / 30 秒、1 / 2 / 5 / 10 分钟，或自定义 **1–600 秒**。选择会保存到 `cortexKit.historySeconds`，支持工作区文件夹设置，立即生效且不改变采样率。增大窗口后逐步积累新数据；已丢弃的旧数据不能恢复。缩小窗口会裁去旧数据。
 
-- VS Code 1.96 or newer.
-- Node.js and npm.
-- Rust 1.85 or newer. `scripts/cargo.ps1` also understands the optional workspace-local `.tooling` installation used by this repository.
+点击 **导出图片**，勾选一个或多个图表并选择保存位置，即可按当前图表顺序竖向合并为一张 **1800 像素宽的 PNG**，保留标题、完整变量图例和各自的 Time / FFT 模式。导出使用生成图片时的当前数据，不暂停目标。
 
-From PowerShell:
+暂停或结束调试后仍可导出；隐藏再打开面板也会恢复保留数据。开始新的目标会话会清空旧数据，重载 VS Code 后不保留。缓存最多保留所选时间窗口及约 800 万个数值，高速、多变量采集可能实际保留更短。需要完整记录时使用 Sample / CSV。合并图片过大时，请分批选择图表。
 
-```powershell
-cd D:\Workspace\projects\cortex-kit
-.\scripts\cargo.ps1 test --workspace
-.\scripts\cargo.ps1 build --workspace
+## Sample：持续后台记录与 CSV 查看
 
-cd extension
-npm ci
-npm test
-npm run test:dap
-```
+执行 **Cortex Kit: Sample / CSV** 打开底部 **Sample**：
 
-Open the repository in VS Code and press `F5` to start the Extension Development Host. Select **Cortex Kit: Mock Debug** for the no-hardware path. Detailed Mock and STM32H723 procedures are in [VS Code and hardware testing](docs/TESTING.md).
+1. 点击 **选择变量**，最多选择 64 个标量，输入请求频率 **1–100000 S/s**。
+2. 点击 **开始记录**并选择 CSV 保存位置。尚未连接时会选择已有配置，以不烧录、不复位、不执行构建任务的方式 attach。目标暂停时需 Continue 才能产生样本。
+3. 记录会持续写入磁盘，直到点击 **停止并保存**。没有定时自动停止；隐藏、关闭或重新打开 Sample 面板不会中断后台记录。
+4. 暂停目标期间保持文件打开，继续后在同一 CSV 中保留实际时间间隔。临时读取失败或数据连接重连会等待新样本；会话结束 / 切换、VS Code 扩展宿主退出、磁盘写入失败或写入积压超过限制时会结束记录并报告状态。
+5. 点击 **导入 CSV** 可离线查看数据，选择时间列及 s / ms / µs / ns 单位、选择信号列，然后滚轮缩放、拖动平移或悬停读值。**显示全部**恢复全范围。
 
-## Package a VSIX
+CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量...>`。时间戳来自适配器的单调主机时钟和实测读取批次，不是 UTC 或目标固件时间戳。记录只使用真实收到的样本，不通过插值或重复值补齐请求频率。预览只保留最近 4000 行，CSV 写入全部实际记录行。导入上限为 64 MB、256 列、200 万个单元格。
 
-The package contains a native Rust executable, so the current artifact is platform-specific:
+## Threads：RTOS 线程与栈内存
 
-```powershell
-cd D:\Workspace\projects\cortex-kit\extension
-npm ci
-npm test
-npm run package
-```
+底部 **Threads** 支持单核 Cortex-M 上的 **ThreadX / FreeRTOS**，根据匹配固件 ELF 的 DWARF 信息自动识别线程列表。应用及 RTOS 内核都应带调试信息；暂不支持其他 RTOS 或 SMP。
 
-This builds the release Rust adapter, copies the Webview and this README into the extension, and creates:
+可查看线程名、状态、优先级、TCB 地址、栈分配 / 已用字节和**栈内存占用百分比**。百分比为已用栈 / 已分配栈，保留一位小数；缺失或无效数据显示 `—`。它基于保存的栈指针估算，不是堆占用、整机 RAM 占用或栈历史高水位；FreeRTOS 还需要 TCB 中提供栈结束地址。
 
-```text
-D:\Workspace\projects\cortex-kit\cortex-kit-win32-x64.vsix
-```
+线程时间计数器占比列已移除。保留的运行占比通过最近 30 秒的当前线程指针观测估算，支持 2 / 10 / 20 Hz 刷新，可能漏掉短任务，也可能将中断时间计入被中断线程。只有 Threads 可见且开启自动刷新时才轮询；轮询会消耗共享探针带宽。
 
-Inspect the package before distribution:
+## 外设、构建、烧录与调试
 
-```powershell
-npx vsce ls --tree
-code --install-extension ..\cortex-kit-win32-x64.vsix --force
-```
+- **外设寄存器**：执行 **Cortex Kit: Select SVD File** 选择 CMSIS-SVD，或设置 `svdFile`。`.s` 汇编和 `.ld` 链接脚本不能代替 SVD。
+- **F7 / Cortex Kit: Build**：调用 CMake Tools 构建。先在 CMake Tools 配置工具链、预设和构建目录。
+- **F8 / Cortex Kit: Flash**：选择固件配置，执行其 `preLaunchTask`（如有），烧录后启动目标并断开；无构建任务时直接使用现有镜像。支持 ELF / AXF / OUT、HEX、BIN、UF2，非 ELF 格式仍需更广泛实机验证。
+- **F5**：启动所选配置，调试过程中继续执行。Flash & Debug 可烧录、校验并复位；F7 / F8 的构建烧录快捷键在调试期间让位于调试快捷键。
+- **Cortex Kit: Import Cortex-Debug Configuration**：从已有 Cortex-Debug 配置导入可识别字段，连接前检查目标、固件和探针设置。
+- **Cortex Kit: Mock Debug**：无硬件时体验模拟调试与采样。
 
-Linux, macOS, Windows Arm64, and other targets need separate native backend builds and separate `vsce --target` packages. A Windows-built VSIX must not be published as a cross-platform fallback.
+当前支持基础暂停 / 继续、硬件断点、单指令步进、CPU 寄存器和内存访问。真实调用栈展开、帧局部变量、源码级 Step Over / Out 和完整反汇编尚未完成，详见 [实现状态](docs/IMPLEMENTATION_STATUS.md)。
 
-## Publish to the VS Code Marketplace
+## 尽量提高采样速度
 
-Before the first public upload:
+通过 **Configure Probe / Sampling → Maximum throughput** 请求 **100000 S/s**，再根据实际稳定性调整调试时钟。请求频率是调度目标，不是保证达到的采样率。
 
-1. Create a publisher in the [Visual Studio Marketplace publisher management page](https://marketplace.visualstudio.com/manage).
-2. Replace the placeholder `publisher` value in `extension/package.json` with the exact publisher ID you own. Confirm that `name` and `displayName` are available and add final icon, license, support, and changelog metadata as appropriate.
-3. Increment `version` for every new Marketplace build. A deleted version number cannot be reused.
-4. Run the complete test and package commands above.
+| 设置 | 含义 |
+| --- | --- |
+| `probe.speedKHz` | SWD / JTAG 请求时钟，单位 kHz；10000 表示 10 MHz |
+| `acquisition.requestedSamplesPerSecond` | Plot 请求采样频率；Maximum throughput 为 100000 S/s |
+| Sample 中的采样频率 | CSV 请求记录频率，与其他采集共享探针 |
+| `cortexKit.liveWatchSamplesPerSecond` | 仅 Live Watch 变量的请求频率，默认 20 S/s |
+| `cortexKit.chartRefreshRate` | Plot 绘制刷新率，默认 30 FPS，不是采样率 |
+| `cortexKit.historySeconds` | Plot 滚动显示与保留时长，不会定时停止 Sample |
 
-For a manual first upload, select the publisher in the management page, choose **New extension > Visual Studio Code**, and upload `cortex-kit-win32-x64.vsix`.
+减少同时监视的变量，优先使用地址连续的普通 RAM 变量，关闭暂时不需要的 Threads 轮询，再观察实际速率和丢帧。图表之间的重复变量会共享读取。CMSIS-DAP 返回的时钟是请求上限，不能据此认定实际物理时钟；提高时钟未必提高吞吐量。Horco CMSIS-DAP 在当前 wbr_2026 混合负载下实测约 100 S/s，未达到 100000 S/s；完整条件见 [性能记录](docs/DAPLINK_2026-09-12.md)。
 
-For CLI publishing, create an Azure DevOps Personal Access Token with the **Marketplace > Manage** scope, then run:
+## 常见问题
 
-```powershell
-cd D:\Workspace\projects\cortex-kit\extension
-npx vsce login <publisher-id>
-npx vsce publish --packagePath ..\cortex-kit-win32-x64.vsix
-```
+| 现象 | 处理方式 |
+| --- | --- |
+| DAPLink 未出现在列表中 | 检查 USB 数据线及设备是否暴露 CMSIS-DAP，关闭占用探针的其他软件，再 Retry |
+| 换探针后连不上 | 结束旧会话，重新运行 Select ST-Link / DAPLink and Connect，避免沿用旧序列号 |
+| 连接失败或数据不稳定 | 核对芯片名、目标供电及 SWD 接线，降低时钟；只有已接 NRST 且需要复位连接时才选 Under reset |
+| 变量缺失或数值不对 | 使用与正在运行固件一致的带 DWARF ELF；优化可能消除变量，重新构建后更新 ELF |
+| Plot 停止变化 | 检查目标是否暂停、会话是否结束，以及是否已选变量；查看 Cortex Kit 输出中的连接状态 |
+| `historySeconds` 无法写入 Folder Settings | 更新至 0.1.12 或更新版本并 Reload Window；该设置现已声明文件夹资源作用域 |
+| 内存百分比显示 `—` | 核对 RTOS 内核调试信息和所需栈字段；插件不会用未知栈大小计算百分比 |
 
-Do not place the token in this repository or a command-line argument. For CI, use Microsoft Entra ID workload identity with `vsce publish --azure-credential`; Microsoft has announced retirement of global Azure DevOps PATs on December 1, 2026.
+反馈问题请提交到 [GitHub Issues](https://github.com/CosmosMount/cortex-kit/issues)，附插件版本、探针型号、芯片名、复现步骤及相关输出。提交前移除日志中不希望公开的固件路径或设备标识。
 
-The authoritative publication procedure is the [VS Code Publishing Extensions guide](https://code.visualstudio.com/api/working-with-extensions/publishing-extension).
+## 致谢
 
-### Keyboard shortcuts
+感谢以下两个参考项目及其作者、贡献者：
 
-- **F5** starts the selected VS Code launch configuration. Select **Cortex Kit: Flash & Debug** to debug firmware; during debugging, F5 continues execution. A configured `preLaunchTask` runs before launch.
-- **F7** runs **Cortex Kit: Build** through CMake Tools (`cmake.build`). Configure the CMake project, kit/toolchain and build preset in CMake Tools first.
-- **F8** flashes the configured firmware and disconnects after starting the target. It selects a Cortex Kit launch configuration and runs its `preLaunchTask` if present; otherwise it uses the existing image. F7/F8 shortcuts are inactive during debugging to preserve debugger shortcuts. **Cortex Kit: Flash** remains available from the command palette in a normal Cortex Kit session.
+- [MemRW3](https://github.com/SuperLiaohy/MemRW3)：为 Rust 采集数据路径、DWARF / SVD / FFT 模块划分和单一 ProbeWorker 的设计提供了参考。
+- [Cortex-Debug](https://github.com/Marus/cortex-debug)：为 VS Code 调试扩展的交互方式和配置体验提供了参考。
 
-Installing Cortex Kit also installs its required **CMake Tools** (`ms-vscode.cmake-tools`) and **C/C++** (`ms-vscode.cpptools`) extensions. Install CMake, a build tool such as Ninja, and the firmware compiler separately for compilation. Existing-image debugging and flashing do not require a compiler.
+Cortex Kit 使用独立的工程结构和通信协议，参考关系见 [架构说明](docs/ARCHITECTURE.md)。同时感谢 [probe-rs](https://probe.rs/) 及其他依赖项目提供的基础能力；第三方组件遵循各自的许可证。
 
+## 许可证与开发
 
-### Sample / CSV recorder
-
-Run **Cortex Kit: Sample / CSV** from the Command Palette, or click the record icon in Live Watch / Plots. The bottom panel has separate **Plot**, **Sample**, and **Threads** tabs. **Plot** shows live curves and **Sample** handles recording and CSV import. The command focuses the Sample tab; each tab has its own panel container.
-
-1. Choose up to 64 scalar variables, a requested frequency (1–100000 S/s), and a duration in seconds. Use 0 to stop manually.
-2. Click **开始记录** and choose the CSV destination. If disconnected, select a configured Cortex Kit target; the recorder attaches without flashing, resetting, or running build tasks. If the target is paused, use Continue to produce samples.
-3. Data is written continuously to disk. **停止并保存**, the duration limit, session termination, or disposing the sampling view finishes the file and restores the previous Plot / Live Watch subscriptions.
-Collapsing the view or switching to Terminal/Output keeps an active recording running; stop explicitly with **停止并保存**.
-
-4. Click **导入 CSV** to view a recording without connecting hardware. Select a numeric timestamp column and its s/ms/µs/ns unit, choose signal columns, scroll to zoom, drag to pan, and hover for the nearest displayed sample. **显示全部** restores the full range. Zooming re-reads the selected range from the imported in-memory data, retaining more detail.
-
-CSV uses UTF-8 with a BOM and the columns `elapsed_s,timestamp_ns,stream_epoch,<variables...>`. `elapsed_s` starts at the first recorded sample. `timestamp_ns` uses the adapter's monotonic host clock, derived from measured read batches; it is neither UTC nor a timestamp generated by target firmware. Pauses retain their elapsed-time gaps, with a new stream epoch on resume. NaN/Infinity become gaps when plotting an imported CSV.
-
-Recording shares the existing probe connection and deduplicates variables with Plot. It selects real frames at the requested recording rate when the shared acquisition runs faster, and reports the achieved rate when hardware runs slower; it never interpolates or repeats values to fill missing samples. The preview retains the latest 4000 rows and uses min/max reduction; all recorded rows are written to CSV. CSV import supports up to 64 MB, 256 columns and 2 million cells, with one header row and numeric timestamps.
-
-
-### Threads / RTOS inspection
-
-The bottom panel has independent **Plot**, **Sample**, and **Threads** tabs. Open Threads during a Cortex Kit debug or Live Plot session. It automatically detects single-core Cortex-M **ThreadX** and **FreeRTOS** from the firmware ELF and uses DWARF member offsets to follow the kernel's thread lists, including dynamically allocated tasks. Build both the application and RTOS kernel with debug information and use the ELF matching the running firmware. Other RTOS kernels and SMP are not yet supported.
-
-Threads shows name, state, priority, TCB address, available stack allocation / saved-SP usage, and ThreadX scheduling count. Stack usage is an estimate from the saved stack pointer, **not** a stack high-water mark; FreeRTOS allocation requires the stack end address in its TCB. Running-target snapshots are non-atomic and may retry when task lists change.
-
-The occupancy columns intentionally distinguish two measurements:
-
-- **Sampled running share:** observations of the current-thread pointer over the last 30 seconds, with selectable 2 / 10 / 20 Hz polling. This is an estimate, can miss short tasks, and may attribute interrupts to their interrupted thread. Unknown / no-current-thread samples remain in the denominator.
-- **Runtime-counter share:** per-thread counter deltas divided by the sum of thread deltas during the last refresh interval. This is relative accounted thread time, not total CPU utilization, and excludes unaccounted ISR / idle time. Unavailable counters show `—`. ThreadX needs execution profiling; FreeRTOS needs `configGENERATE_RUN_TIME_STATS`. The view does not modify firmware configuration.
-
-Only the visible Threads tab polls memory; hiding it or disabling automatic refresh stops polling. It shares the existing debug connection, does not pause/reset/flash the target, and does not alter Plot / Sample subscriptions.
+Cortex Kit 原创代码采用 [MIT License](LICENSE)。开发、验证与发布步骤见 [发布指南](docs/RELEASING.md)，版本变化见 [CHANGELOG](CHANGELOG.md)。
