@@ -26,6 +26,27 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private pendingLiveWatchValues = new Map<string, LiveWatchValue>();
   private liveWatchTimer?: NodeJS.Timeout;
   private lastSubscriptionKey?: string;
+  private recording?: { ids: string[]; rate: number };
+  private readonly samples = new vscode.EventEmitter<SampleBatch>();
+  readonly onDidReceiveSamples = this.samples.event;
+  private readonly sessionChanged = new vscode.EventEmitter<vscode.DebugSession | undefined>();
+  readonly onDidChangeSession = this.sessionChanged.event;
+  private readonly dataReady = new vscode.EventEmitter<void>();
+  private readonly streamError = new vscode.EventEmitter<string>();
+  readonly onDidReceiveStreamError = this.streamError.event;
+  get session(): vscode.DebugSession | undefined { return this.activeSession; }
+  getVariables(): VariableDescriptor[] { return this.catalog; }
+  waitForDataChannel(timeoutMs = 30000): Promise<void> {
+    if (this.dataChannel) { return Promise.resolve(); }
+    return new Promise((resolve, reject) => {
+      const listener = this.dataReady.event(() => { clearTimeout(timer); listener.dispose(); resolve(); });
+      const timer = setTimeout(() => { listener.dispose(); reject(new Error('等待采样通道超时，请检查目标连接。')); }, timeoutMs);
+    });
+  }
+  async setRecordingSubscription(ids: string[], rate = 1000): Promise<void> {
+    this.recording = ids.length ? { ids: [...new Set(ids)], rate } : undefined;
+    await this.updateSubscriptions(true);
+  }
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.layouts = context.workspaceState.get<ChartLayout[]>('cortexKit.plots', [{ id: 'chart-1', title: 'Plot 1', mode: 'time', variableIds: [] }]);
@@ -36,9 +57,14 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.closeDataChannel(true);
     if (this.liveWatchTimer) { clearTimeout(this.liveWatchTimer); }
     this.liveWatchValues.dispose();
+    this.samples.dispose();
+    this.sessionChanged.dispose();
+    this.dataReady.dispose();
+    this.streamError.dispose();
   }
   setSession(session?: vscode.DebugSession): void {
     const changed = this.activeSession?.id !== session?.id;
+    if (changed) { this.closeDataChannel(true); }
     this.activeSession = session;
     if (changed) { this.clearHistory(); this.pendingLiveWatchValues.clear(); this.lastSubscriptionKey = undefined; }
     if (!session) {
@@ -46,14 +72,19 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       this.post({ type: 'session', state: undefined });
       this.closeDataChannel(true);
     }
+    if (changed) { this.recording = undefined; this.sessionChanged.fire(session); }
   }
   setCatalog(catalog: VariableDescriptor[]): void { const expressions = this.catalog.filter(item => item.id.startsWith('expr:')); this.catalog = [...flattenVariables(catalog), ...expressions]; this.post({ type: 'catalog', variables: this.catalog }); void this.updateSubscriptions(); }
   setLiveWatchIds(ids: string[]): void { this.liveWatchIds = [...new Set(ids)]; void this.updateSubscriptions(); }
-  refreshSubscriptions(): Promise<void> { return this.updateSubscriptions(); }
-  setState(state: SessionState): void { this.state = state; this.post({ type: 'session', state }); }
+  refreshSubscriptions(): Promise<void> { this.lastSubscriptionKey = undefined; return this.updateSubscriptions(); }
+  setState(state: SessionState): void {
+    if (state.lastError && state.lastError !== this.state?.lastError) { this.streamError.fire(state.lastError); }
+    this.state = state; this.post({ type: 'session', state });
+  }
   connect(info: DataChannelInfo): void {
     this.dataChannel = info;
     this.openDataChannel();
+    this.dataReady.fire();
   }
   private openDataChannel(): void {
     const info = this.dataChannel;
@@ -64,10 +95,11 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const decoder = new BatchDecoder();
     const socket = net.createConnection({ host: '127.0.0.1', port: info.port }, () => socket.write(`${info.token}\n`));
     this.socket = socket;
-    socket.on('data', chunk => { try { for (const batch of decoder.push(chunk)) { this.acceptBatch(batch); } } catch (error) { void vscode.window.showErrorMessage(`Cortex Kit sample stream error: ${String(error)}`); } });
-    socket.on('error', error => this.post({ type: 'streamError', message: error.message }));
+    socket.on('data', chunk => { try { for (const batch of decoder.push(chunk)) { this.acceptBatch(batch); } } catch (error) { this.streamError.fire(String(error)); void vscode.window.showErrorMessage(`Cortex Kit sample stream error: ${String(error)}`); } });
+    socket.on('error', error => { this.streamError.fire(error.message); this.post({ type: 'streamError', message: error.message }); });
     socket.on('close', () => {
       if (generation !== this.socketGeneration || !this.activeSession || !this.dataChannel) { return; }
+      this.streamError.fire('采样通道断开，当前 CSV 记录已停止。');
       this.reconnectTimer = setTimeout(() => this.openDataChannel(), 250);
     });
   }
@@ -119,6 +151,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
   private acceptBatch(batch: SampleBatch): void {
     if (this.state && (batch.sessionId !== this.state.sessionId || batch.programGeneration !== this.state.programGeneration || batch.streamEpoch !== this.state.streamEpoch)) { return; }
+    this.samples.fire(batch);
     this.queueLiveWatchValues(latestLiveWatchValues(batch, this.liveWatchIds));
     if (this.view?.visible && batch.channelIds.some(id => this.plotSubscriptionIds.has(id))) {
       const displayedIds = new Set(this.layouts.flatMap(chart => chart.variableIds));
@@ -169,18 +202,20 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
   private async saveLayouts(): Promise<void> { await this.context.workspaceState.update('cortexKit.plots', this.layouts); this.post({ type: 'layout', charts: this.layouts }); await this.updateSubscriptions(); }
   private async saveArrangement(): Promise<void> { await this.context.workspaceState.update('cortexKit.plotArrangement', this.arrangement); this.post({ type: 'layout', charts: this.layouts, arrangement: this.arrangement }); }
-  private async updateSubscriptions(): Promise<void> {
+  private async updateSubscriptions(throwOnError = false): Promise<void> {
     if (!this.activeSession) { return; }
     const plotIds = resolveSubscriptionIds(this.layouts, this.catalog);
     this.plotSubscriptionIds = new Set(plotIds);
     const plotRate = Number(this.activeSession.configuration.acquisition?.requestedSamplesPerSecond ?? 1000);
     const liveWatchRate = vscode.workspace.getConfiguration('cortexKit').get('liveWatchSamplesPerSecond', 20);
-    const subscription = splitSubscriptions(plotIds, this.liveWatchIds, plotRate, liveWatchRate);
+    const foregroundIds = [...new Set([...plotIds, ...(this.recording?.ids ?? [])])];
+    const foregroundRate = Math.max(plotIds.length ? plotRate : 0, this.recording?.rate ?? 0);
+    const subscription = splitSubscriptions(foregroundIds, this.liveWatchIds, foregroundRate, liveWatchRate);
     const key = JSON.stringify([this.activeSession.id, subscription]);
     if (key === this.lastSubscriptionKey) { return; }
     this.lastSubscriptionKey = key;
     try { await this.activeSession.customRequest('cortexKit/setSubscriptions', subscription); }
-    catch (error) { if (this.lastSubscriptionKey === key) { this.lastSubscriptionKey = undefined; } this.post({ type: 'streamError', message: `Subscription failed: ${String(error)}` }); }
+    catch (error) { if (this.lastSubscriptionKey === key) { this.lastSubscriptionKey = undefined; } this.post({ type: 'streamError', message: `Subscription failed: ${String(error)}` }); if (throwOnError) { throw error; } }
   }
   private pushSnapshot(): void { this.post({ type: 'snapshot', charts: this.layouts, arrangement: this.arrangement, variables: this.catalog, state: this.state, refreshRate: vscode.workspace.getConfiguration('cortexKit').get('chartRefreshRate', 30), historySeconds: vscode.workspace.getConfiguration('cortexKit').get('historySeconds', 30) }); void this.updateSubscriptions(); }
   private clearHistory(): void { this.post({ type: 'clearHistory' }); }

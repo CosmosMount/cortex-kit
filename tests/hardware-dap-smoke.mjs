@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import net from 'node:net';
@@ -146,6 +146,21 @@ async function main() {
   assert.ok(batches.length, 'no sample batches received');
   const acquisitionState = await dap.request('cortexKit/getState');
   assert.ok(!acquisitionState.lastError, acquisitionState.lastError);
+  let recordingCsv;
+  if (process.env.CORTEX_KIT_CSV) {
+    const { FrameSampler, csvHeader, csvRows, parseCsv } = require(path.join(root, 'extension', 'out', 'recordingModel.js'));
+    const recorded = customSelection ? selected.filter(item => customSelection.ids.includes(item.id)) : selected;
+    const sampler = new FrameSampler(recorded.map(item => item.id), Number(process.env.CORTEX_KIT_CSV_RATE ?? requestedSamplesPerSecond));
+    const rows = batches.flatMap(batch => sampler.accept(batch));
+    assert.ok(rows.length > 1, 'CSV recording received too few samples');
+    const csv = csvHeader(recorded.map(item => item.expression)) + csvRows(rows);
+    writeFileSync(process.env.CORTEX_KIT_CSV, csv, 'utf8');
+    const imported = parseCsv(readFileSync(process.env.CORTEX_KIT_CSV, 'utf8'));
+    assert.equal(imported.rows.length, rows.length);
+    assert.equal(imported.headers.length, recorded.length + 3);
+    recordingCsv = { path: process.env.CORTEX_KIT_CSV, rows: rows.length, requestedSamplesPerSecond: sampler.requestedHz, actualSamplesPerSecond: sampler.actualHz, elapsedSeconds: sampler.elapsedSeconds, roundTripVerified: true };
+  }
+
   let runningWrite = { enabled: false };
   if (verifyRunningWrite) {
     const candidate = leaves.find(item => item.expression === 'AliveThread.tx_thread_id')
@@ -341,6 +356,7 @@ async function main() {
     executable,
     selection: customSelection,
     acquisitionState,
+    recordingCsv,
     requestedSamplesPerSecond,
     channelProfile,
     channelCount: selected.length,

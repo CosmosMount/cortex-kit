@@ -88,7 +88,10 @@
         { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Flash & Debug", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 10000, "connectUnderReset": false }, "flashing": { "enabled": true, "verify": true, "resetAfter": true }, "acquisition": { "requestedSamplesPerSecond": 5000, "maxBurstMs": 2, "historySeconds": 30 } }
       ]
     }],
-    "viewsContainers": { "panel": [{ "id": "cortex-kit-panel", "title": "Cortex Kit", "icon": "resources/cortex-kit.svg" }] },
+    "viewsContainers": { "panel": [
+      { "id": "cortex-kit-panel", "title": "Plot", "icon": "resources/cortex-kit.svg" },
+      { "id": "cortex-kit-sample", "title": "Sample", "icon": "resources/cortex-kit.svg" }
+    ] },
     "views": {
       "debug": [
         { "id": "cortexKit.liveWatch", "name": "Cortex Kit Live Watch" },
@@ -96,7 +99,12 @@
         { "id": "cortexKit.peripherals", "name": "Cortex Kit Peripherals" },
         { "id": "cortexKit.session", "name": "Cortex Kit Session" }
       ],
-      "cortex-kit-panel": [{ "id": "cortexKit.plots", "name": "Plots", "type": "webview" }]
+      "cortex-kit-panel": [
+        { "id": "cortexKit.plots", "name": "Plot", "type": "webview", "order": 1 }
+      ],
+      "cortex-kit-sample": [
+        { "id": "cortexKit.sample", "name": "Sample", "type": "webview", "order": 1, "visibility": "visible" }
+      ]
     },
     "commands": [
       { "command": "cortexKit.configureProject", "title": "Cortex Kit: Configure Project" },
@@ -118,6 +126,7 @@
       { "command": "cortexKit.addVariableToPlot", "title": "Add to Plot", "icon": "$(graph)" },
       { "command": "cortexKit.addChart", "title": "Add Chart", "icon": "$(add)" },
       { "command": "cortexKit.openPlots", "title": "Cortex Kit: Open Plots" },
+      { "command": "cortexKit.openRecorder", "title": "Cortex Kit: Sample / CSV", "icon": "$(record)" },
       { "command": "cortexKit.readRegister", "title": "Read Register" },
       { "command": "cortexKit.writeRegister", "title": "Write Register" }
     ],
@@ -129,7 +138,8 @@
         { "command": "cortexKit.searchVariables", "when": "view == cortexKit.variables", "group": "navigation@1" },
         { "command": "cortexKit.selectSvd", "when": "view == cortexKit.peripherals", "group": "navigation@1" },
         { "command": "cortexKit.refresh", "when": "view == cortexKit.variables || view == cortexKit.peripherals || view == cortexKit.session", "group": "navigation" },
-        { "command": "cortexKit.addChart", "when": "view == cortexKit.plots", "group": "navigation" }
+        { "command": "cortexKit.addChart", "when": "view == cortexKit.plots", "group": "navigation" },
+        { "command": "cortexKit.openRecorder", "when": "view == cortexKit.plots || view == cortexKit.liveWatch", "group": "navigation@4" }
       ],
       "view/item/context": [
         { "command": "cortexKit.writeLiveWatch", "when": "view == cortexKit.liveWatch && viewItem == cortexKit.liveWatchWritable", "group": "inline@1" },

@@ -7,6 +7,7 @@ import { validateLiveWatchInput } from './liveWatchModel';
 import { inspectElf, isDwarfImage, resolveConfiguredPath } from './offlineCatalog';
 import { expandVariableSelections, isPlottableVariable, isVariableSelection, plottableLeaves } from './plotModel';
 import { PlotViewProvider } from './plots';
+import { SampleRecorder } from './recorder';
 import { configureProject, defaultBackendPath, expandWorkspace, importCortexDebugConfiguration } from './projectConfig';
 import { inspectSvd } from './svdCatalog';
 import { SessionState, SvdTree, VariableDescriptor } from './types';
@@ -18,6 +19,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const peripherals = new PeripheralsProvider();
   const sessionView = new SessionProvider();
   const plots = new PlotViewProvider(context);
+  const recorder = new SampleRecorder(context, plots);
   const variablesView = vscode.window.createTreeView('cortexKit.variables', { treeDataProvider: variables });
   const liveWatchView = vscode.window.createTreeView('cortexKit.liveWatch', { treeDataProvider: liveWatch });
   const peripheralsView = vscode.window.createTreeView('cortexKit.peripherals', { treeDataProvider: peripherals });
@@ -84,7 +86,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     peripheralsView,
     vscode.window.registerTreeDataProvider('cortexKit.session', sessionView),
     vscode.window.registerWebviewViewProvider('cortexKit.plots', plots, { webviewOptions: { retainContextWhenHidden: true } }),
+    vscode.window.registerWebviewViewProvider('cortexKit.sample', recorder, { webviewOptions: { retainContextWhenHidden: true } }),
     plots,
+    recorder,
     output,
     offlineIndex,
     svdIndex,
@@ -295,6 +299,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   register('cortexKit.addChart', () => plots.addChart());
   register('cortexKit.addVariableToPlot', (node?: VariableNode) => plots.addVariables(undefined, node ? expandVariableSelections([node.variable]) : undefined));
   register('cortexKit.openPlots', () => vscode.commands.executeCommand('cortexKit.plots.focus'));
+  register('cortexKit.openRecorder', () => recorder.open());
   register('cortexKit.readRegister', async (node?: RegisterNode) => {
     if (!node) { return; }
     if (!active) { void vscode.window.showInformationMessage('The SVD register map is available offline. Attach or start Cortex Kit to read live values.'); return; }
@@ -388,6 +393,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } finally { flashing = false; }
   });
   register('cortexKit.benchmark', async () => {
+    if (recorder.isRecording) { void vscode.window.showInformationMessage('请先停止 CSV 记录，再运行采样基准测试。'); return; }
     if (!active) { void vscode.window.showErrorMessage('Start or attach a Cortex Kit session first.'); return; }
     const items = variables.getVariables().filter(isPlottableVariable).filter(item => !item.id.startsWith('expr:')).map(variable => ({ label: variable.expression, description: variable.typeName, variable }));
     const selected = await vscode.window.showQuickPick(items, { canPickMany: true, placeHolder: 'Select up to eight variables for the acquisition benchmark' });
