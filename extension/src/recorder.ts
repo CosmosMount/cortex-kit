@@ -7,7 +7,7 @@ import { SampleBatch } from './types';
 
 interface Recording {
   sampler: FrameSampler; stream: fs.WriteStream; uri: vscode.Uri; names: string[];
-  ready: boolean; preview: RecordedRow[]; droppedStart?: number; dropped: number; timer?: NodeJS.Timeout;
+  ready: boolean; preview: RecordedRow[]; droppedStart?: number; dropped: number; waitingForSamples?: boolean;
 }
 
 /** A docked view in the Cortex Kit bottom panel; shares the existing sample socket. */
@@ -15,7 +15,6 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
   private panel?: vscode.WebviewView;
   private selectedIds: string[];
   private requestedHz: number;
-  private durationSeconds = 10;
   private recording?: Recording;
   private busy = false;
   private status = '选择变量后开始记录，或导入 CSV 离线查看曲线。';
@@ -36,13 +35,18 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     this.requestedHz = context.workspaceState.get<number>('cortexKit.recorder.rate', 1000);
     this.subscriptions = [
       plots.onDidReceiveSamples(batch => this.acceptBatch(batch)),
-      plots.onDidReceiveStreamError(error => { if (this.recording) { void this.stop(error, true); } }),
+      plots.onDidReceiveStreamError(error => {
+        if (this.recording) {
+          this.recording.waitingForSamples = true;
+          this.fail(`采样暂时中断，记录任务保持运行并等待数据恢复：${error}`);
+        }
+      }),
       plots.onDidChangeSession(() => {
         if (this.recording) { void this.stop('目标会话已结束或切换，记录已保存。'); }
         this.snapshot();
       }),
     ];
-    this.refreshTimer = setInterval(() => { if (this.dirty) { this.dirty = false; this.sendPreview(); this.snapshot(); } }, 250);
+    this.refreshTimer = setInterval(() => { if (this.dirty && this.panel?.visible) { this.dirty = false; this.sendPreview(); this.snapshot(); } }, 250);
   }
   get isRecording(): boolean { return Boolean(this.recording || this.busy || this.stopping); }
   dispose(): void {
@@ -63,7 +67,8 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     view.onDidChangeVisibility(() => {
       if (view.visible) { this.snapshot(); if (this.imported) { this.sendImported(); } else { this.sendPreview(); } }
     });
-    view.onDidDispose(() => { if (this.panel === view) { this.panel = undefined; void this.stop('采样视图已关闭，记录已保存。'); } });
+    // Recording belongs to the extension/session, not to the disposable view.
+    view.onDidDispose(() => { if (this.panel === view) { this.panel = undefined; } });
   }
   private post(message: unknown): void { void this.panel?.webview.postMessage(message); }
   private snapshot(): void {
@@ -72,7 +77,7 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     const stats = recording ? { rows: recording.sampler.count, actualHz: recording.sampler.actualHz, elapsedSeconds: recording.sampler.elapsedSeconds, dropped: recording.dropped } : this.lastStats;
     this.post({ type: 'state', recording: Boolean(recording), busy: this.busy || Boolean(this.stopping),
       connected: Boolean(this.plots.session), selected: this.selectedIds.map(id => catalog.get(id)?.expression ?? id),
-      requestedHz: this.requestedHz, durationSeconds: this.durationSeconds, status: this.status, error: this.error,
+      requestedHz: this.requestedHz, status: this.status, error: this.error,
       file: this.file?.fsPath, ...stats,
       imported: this.imported ? { headers: this.imported.headers, rows: this.imported.rows.length, timeColumn: this.timeColumn, scale: this.scale, columns: this.columns } : undefined,
     });
@@ -105,7 +110,7 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
       this.busy = true; this.snapshot();
       try { await this.selectVariables(); } finally { this.busy = false; this.snapshot(); }
     }
-    if (message.type === 'start') { await this.start(Number(message.rate), Number(message.duration)); }
+    if (message.type === 'start') { await this.start(Number(message.rate)); }
     if (message.type === 'import') { await this.importCsv(); }
   }
   private async selectVariables(): Promise<void> {
@@ -121,11 +126,10 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     await this.context.workspaceState.update('cortexKit.recorder.variables', this.selectedIds);
     this.snapshot();
   }
-  private async start(rate: number, duration: number): Promise<void> {
+  private async start(rate: number): Promise<void> {
     const panel = this.panel;
     if (!panel) { return; }
     validateSampleRate(rate);
-    if (!Number.isFinite(duration) || duration < 0 || duration > 86400) { throw new Error('记录时长应为 0–86400 秒；0 表示手动停止。'); }
     this.busy = true; this.error = false; this.snapshot();
     try {
       if (!this.selectedIds.length) { await this.selectVariables(); }
@@ -145,7 +149,7 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
       if (!uri || this.panel !== panel) { return; }
       if (uri.scheme !== 'file') { throw new Error('连续采样请选择本机文件路径。'); }
       if (this.plots.session?.id !== session.id) { throw new Error('目标会话已变化，请重新开始。'); }
-      this.requestedHz = rate; this.durationSeconds = duration;
+      this.requestedHz = rate;
       await this.context.workspaceState.update('cortexKit.recorder.rate', rate);
       if (this.panel !== panel) { return; }
       const stream = fs.createWriteStream(uri.fsPath, { encoding: 'utf8' });
@@ -159,8 +163,7 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
       await this.plots.setRecordingSubscription(this.selectedIds, rate);
       if (this.recording !== recording || this.plots.session?.id !== session.id) { throw new Error('记录启动时会话已结束。'); }
       recording.ready = true;
-      if (duration > 0) { recording.timer = setTimeout(() => { void this.stop('已达到设定时长，CSV 已保存。'); }, duration * 1000); }
-      this.status = '正在记录到 CSV；实际频率取决于硬件吞吐。暂停目标时保留时间间隔。';
+      this.status = '持续后台记录，点击“停止并保存”结束。切换或关闭采样视图不影响记录；暂停目标时保留时间间隔。';
     } catch (error) {
       if (this.recording) { await this.stop(error instanceof Error ? error.message : String(error), true); }
       throw error;
@@ -189,6 +192,10 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
       if (recording.stream.writableLength > 8 * 1024 * 1024) { throw new Error('磁盘写入跟不上采样，已停止记录并保存已接收数据。'); }
       const rows = recording.sampler.accept(batch);
       if (!rows.length) { return; }
+      if (recording.waitingForSamples) {
+        recording.waitingForSamples = false; this.error = false;
+        this.status = '采样已恢复，继续后台记录到同一 CSV；中断期间保留真实时间间隔。';
+      }
       recording.droppedStart ??= batch.droppedFrames;
       recording.dropped = Math.max(0, batch.droppedFrames - recording.droppedStart);
       recording.stream.write(csvRows(rows));
@@ -203,7 +210,6 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     if (!recording) { return; }
     this.sendPreview();
     this.recording = undefined;
-    clearTimeout(recording.timer);
     this.lastStats = { rows: recording.sampler.count, actualHz: recording.sampler.actualHz, elapsedSeconds: recording.sampler.elapsedSeconds, dropped: recording.dropped };
     this.stopping = (async () => {
       try {
@@ -265,7 +271,7 @@ export function recorderHtml(webview: vscode.Webview, media: vscode.Uri): string
   const style = webview.asWebviewUri(vscode.Uri.joinPath(media, 'recorder.css'));
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${style}"></head><body>
   <header><div><span class="eyebrow">CORTEX KIT</span><h1>采样记录 / CSV 曲线</h1></div><div class="window-actions"><span id="connection" class="badge">未连接</span></div></header>
-  <section class="controls" aria-label="采样设置"><button id="select">选择变量 <span id="selected-count">0</span></button><label>采样频率 <div><input id="rate" type="number" min="1" max="100000" step="1" value="1000"><span>S/s</span></div></label><label>记录时长 <div><input id="duration" type="number" min="0" max="86400" step="1" value="10"><span>秒 · 0 为手动</span></div></label><button id="start" class="primary">● 开始记录</button><button id="stop" disabled>■ 停止并保存</button><button id="import">导入 CSV</button></section>
+  <section class="controls" aria-label="采样设置"><button id="select">选择变量 <span id="selected-count">0</span></button><label>采样频率 <div><input id="rate" type="number" min="1" max="100000" step="1" value="1000"><span>S/s</span></div></label><span>持续记录 · 手动停止</span><button id="start" class="primary">● 开始记录</button><button id="stop" disabled>■ 停止并保存</button><button id="import">导入 CSV</button></section>
   <div id="selected" class="selected" title="采样变量">尚未选择采样变量</div>
   <section class="stats"><div><small>实际记录频率</small><strong id="actual">—</strong></div><div><small>已记录样本 / 行</small><strong id="rows">0</strong></div><div><small>采样时间跨度</small><strong id="elapsed">0.000 s</strong></div><div><small>通道丢帧</small><strong id="dropped">0</strong></div></section>
   <div class="file-row"><span id="file">尚未选择文件</span><button id="reveal" disabled>打开所在文件夹</button></div><p id="status" role="status">选择变量后开始记录，或导入 CSV 离线查看曲线。</p>

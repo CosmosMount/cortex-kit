@@ -8,7 +8,7 @@
   const padding = { left: 76, right: 24, top: 24, bottom: 42 };
   const send = (type, data = {}) => vscode.postMessage({ type, ...data });
   el('select').onclick = () => send('select');
-  el('start').onclick = () => send('start', { rate: Number(el('rate').value), duration: Number(el('duration').value) });
+  el('start').onclick = () => send('start', { rate: Number(el('rate').value) });
   el('stop').onclick = () => send('stop');
   el('import').onclick = () => send('import');
   el('reveal').onclick = () => send('reveal');
@@ -36,7 +36,7 @@
   });
   function updateState() {
     const locked = state.recording || state.busy;
-    for (const id of ['select', 'start', 'import', 'rate', 'duration']) { el(id).disabled = locked; }
+    for (const id of ['select', 'start', 'import', 'rate']) { el(id).disabled = locked; }
     el('stop').disabled = !state.recording;
     el('reveal').disabled = !state.file;
     el('connection').textContent = state.recording ? '● 正在记录' : state.connected ? '目标已连接' : '离线 · 可导入 CSV';
@@ -44,7 +44,7 @@
     el('selected-count').textContent = state.selected?.length ?? 0;
     el('selected').textContent = state.selected?.length ? state.selected.join('  ·  ') : '尚未选择采样变量';
     el('selected').title = state.selected?.join('\n') ?? '';
-    if (!settingsInitialized || state.recording) { el('rate').value = state.requestedHz; el('duration').value = state.durationSeconds; settingsInitialized = true; }
+    if (!settingsInitialized || state.recording) { el('rate').value = state.requestedHz; settingsInitialized = true; }
     el('actual').textContent = state.actualHz ? `${state.actualHz.toFixed(1)} S/s` : '—';
     el('rows').textContent = (state.imported?.rows ?? state.rows ?? 0).toLocaleString();
     el('elapsed').textContent = `${(state.elapsedSeconds ?? 0).toFixed(3)} s`;

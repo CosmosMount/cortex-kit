@@ -34,11 +34,14 @@ test('Threads lifecycle stops hidden/disposed reads, avoids overlap and excludes
     controller=new ThreadsView({extensionUri:'extension'},plots);
     const view:any={visible:false,webview:{asWebviewUri:(v:any)=>v,postMessage:(m:any)=>{messages.push(m);return Promise.resolve(true);},onDidReceiveMessage:(fn:any)=>{message=fn;return disposable;}},onDidDispose:()=>disposable,onDidChangeVisibility:(fn:any)=>{visibility=fn;return disposable;}};
     controller.resolveWebviewView(view);
-    assert.ok(view.webview.html.includes('计数器'));
+    assert.ok(!view.webview.html.includes('线程时间占比'));
+    assert.ok(view.webview.html.includes('运行占比 · 抽样估算'));
     assert.equal(requests.length,0);
     const settled=async()=>{for(let i=0;i<100&&controller.busy;i++) await new Promise(setImmediate);controller.cancelTimer();assert.equal(controller.busy,false);};
     view.visible=true;visibility();await settled();
     assert.equal(currentReads,1);assert.equal(snapshotReads,1);assert.equal(messages.at(-1).rows[0].sampled,100);
+    assert.equal(messages.at(-1).rows[0].runtime,undefined);
+    assert.ok(!messages.at(-1).note.includes('execution profiling'));
     await Promise.all([controller.tick(true),controller.tick(true)]);controller.cancelTimer();
     assert.equal(currentReads,2);assert.equal(snapshotReads,2);
     running=false;stateChange({session,event:'cortexKit.state',body:{targetState:{halted:{reason:'pause'}}}});

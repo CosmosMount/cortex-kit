@@ -19,7 +19,6 @@ test('recorder writes real CSV, restores Plot/Watch subscriptions and imports it
   }
   const uri = (fsPath: string) => ({ fsPath, scheme: 'file', toString: () => fsPath });
   const storage = new Map();
-  let onDispose = () => {}, disposed = false;
   const vscode = {
     EventEmitter: Emitter, ViewColumn: { Beside: 2 },
     Uri: { file: uri, joinPath: (base: any, ...parts: string[]) => uri(path.join(base.fsPath, ...parts)) },
@@ -30,10 +29,14 @@ test('recorder writes real CSV, restores Plot/Watch subscriptions and imports it
     window: {
       showQuickPick: async (items: any[]) => items,
       showSaveDialog: async () => { if (closeDuringSave) { recorder.panel.dispose(); } return uri(filename); }, showOpenDialog: async () => [uri(filename)],
-      createWebviewPanel: () => ({
+      createWebviewPanel: () => {
+        let onDispose = () => {}, onVisibility = () => {}, disposed = false;
+        return {
         webview: { cspSource: 'test', asWebviewUri: (value: any) => value.fsPath, postMessage: (value: any) => { messages.push(value); return Promise.resolve(true); }, onDidReceiveMessage: () => ({ dispose() {} }), html: '' },
-        onDidDispose: (callback: () => void) => { onDispose = callback; }, onDidChangeVisibility() {}, visible: true, dispose() { if (!disposed) { disposed = true; onDispose(); } },
-      }),
+        onDidDispose: (callback: () => void) => { onDispose = callback; }, onDidChangeVisibility(callback: () => void) { onVisibility = callback; }, visible: true,
+        setVisible(visible: boolean) { this.visible = visible; onVisibility(); },
+        dispose() { if (!disposed) { disposed = true; onDispose(); } },
+      }; },
     },
     commands: { executeCommand: async (command: string) => { requests.push({ command }); } },
     debug: { startDebugging: async (_folder: any, config: any) => {
@@ -61,8 +64,9 @@ test('recorder writes real CSV, restores Plot/Watch subscriptions and imports it
     recorder.resolveWebviewView(vscode.window.createWebviewPanel());
     assert.ok(recorder.panel.webview.html.includes('采样记录 / CSV 曲线'));
     assert.ok(!recorder.panel.webview.html.includes('独立窗口'));
+    assert.ok(!recorder.panel.webview.html.includes('id="duration"'));
     await recorder.handle({ type: 'select' });
-    await recorder.handle({ type: 'start', rate: 100, duration: 0 });
+    await recorder.handle({ type: 'start', rate: 100 });
     assert.equal(recorder.isRecording, true);
     assert.deepEqual(requests.at(-1).ids, ['a', 'b']);
     assert.deepEqual(requests.at(-1).backgroundIds, ['watch']);
@@ -96,12 +100,38 @@ test('recorder writes real CSV, restores Plot/Watch subscriptions and imports it
     assert.equal(launchConfig.postDebugTask, undefined);
     assert.deepEqual(launchConfig.flashing, { enabled: false, verify: false, resetAfter: false });
     await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(recorder.isRecording, true, 'legacy duration must not schedule an automatic stop');
+    plots.acceptBatch(batch);
+    const rowCount = recorder.recording.sampler.count;
+    recorder.panel.setVisible(false);
+    plots.acceptBatch({ ...batch, batchSequence: 2, startTimestampNs: 6_000_000_000 });
+    assert.equal(recorder.recording.sampler.count, rowCount * 2, 'hidden view keeps recording');
+    recorder.panel.dispose();
+    assert.equal(recorder.isRecording, true, 'disposing only the view must not stop recording');
+    assert.equal(recorder.panel, undefined);
+    plots.acceptBatch({ ...batch, batchSequence: 3, startTimestampNs: 7_000_000_000 });
+    assert.equal(recorder.recording.sampler.count, rowCount * 3);
+    recorder.resolveWebviewView(vscode.window.createWebviewPanel());
+    await recorder.handle({ type: 'ready' });
+    assert.equal(messages.filter(message => message.type === 'state').at(-1).recording, true);
+    assert.equal(recorder.recording.sampler.count, rowCount * 3, 'reopening restores the same recording');
     await recorder.stop();
     assert.equal(recorder.isRecording, false);
+    assert.equal(parseCsv(fs.readFileSync(filename, 'utf8')).rows.length, rowCount * 3);
     await recorder.handle({ type: 'start', rate: 100, duration: 0 });
+    plots.acceptBatch(batch);
     plots.setState({ sessionId: 's', programGeneration: 1, streamEpoch: 1, lastError: 'probe read failed' });
+    assert.equal(recorder.isRecording, true, 'transient stream errors retain the recording');
+    assert.equal(recorder.recording.waitingForSamples, true);
+    plots.acceptBatch({ ...batch, batchSequence: 2, startTimestampNs: 8_000_000_000 });
+    assert.equal(recorder.recording.waitingForSamples, false);
+    assert.equal(recorder.error, false);
+    plots.setSession(undefined);
     await recorder.stop();
     assert.equal(recorder.isRecording, false);
+    const recovered = parseCsv(fs.readFileSync(filename, 'utf8'));
+    assert.equal(recovered.rows.length, 6);
+    assert.equal(recovered.rows[3][0], 3, 'CSV retains the real gap across a stream interruption');
     closeDuringSave = true;
     const originalFile = fs.readFileSync(filename, 'utf8');
     await recorder.handle({ type: 'start', rate: 100, duration: 0 });

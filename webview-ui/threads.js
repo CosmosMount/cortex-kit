@@ -12,7 +12,10 @@
     if (data.note) { byId('note').textContent = data.note; }
     byId('rows').replaceChildren(...(data.rows || []).map(t => {
       const row = document.createElement('tr'); if (t.state === 'Running') { row.className = 'running'; }
-      for (const text of [t.name, t.state, t.priority, percent(t.sampled), percent(t.runtime), `${t.stackUsed ?? '—'} / ${t.stackBytes ?? '—'}`, t.runs ?? '—', '0x' + t.address.toString(16).padStart(8, '0')]) {
+      const stackPercent = Number.isFinite(t.stackUsed) && Number.isFinite(t.stackBytes)
+        && t.stackBytes > 0 && t.stackUsed >= 0 && t.stackUsed <= t.stackBytes
+        ? t.stackUsed / t.stackBytes * 100 : undefined;
+      for (const text of [t.name, t.state, t.priority, percent(t.sampled), `${t.stackUsed ?? '—'} / ${t.stackBytes ?? '—'}`, percent(stackPercent), t.runs ?? '—', '0x' + t.address.toString(16).padStart(8, '0')]) {
         const cell = document.createElement('td'); cell.textContent = String(text); row.appendChild(cell);
       }
       return row;
