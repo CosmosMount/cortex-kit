@@ -1,0 +1,155 @@
+{
+  "probe": "Horco CMSIS-DAP,SN:1081747132",
+  "chip": "STM32H723VG",
+  "speedKHz": 50000,
+  "backendProfile": "release",
+  "executable": "D:\\Workspace\\projects\\cortex-kit\\target\\release\\cortex-kit-dap.exe",
+  "acquisitionState": {
+    "actualSamplesPerSecond": 78.62055362205389,
+    "chip": "STM32H723VG",
+    "droppedFrames": 0,
+    "lastError": null,
+    "probeName": "Horco CMSIS-DAP (1081747132)",
+    "programGeneration": 0,
+    "revision": 10,
+    "sessionId": "8238-18d47f6ec2729ff0",
+    "stopId": 1,
+    "streamEpoch": 2,
+    "targetState": "running"
+  },
+  "requestedSamplesPerSecond": 100000,
+  "channelProfile": "representative",
+  "channelCount": 8,
+  "connectUnderReset": false,
+  "durationSeconds": 8,
+  "flashed": false,
+  "plotOnly": true,
+  "rootVariables": 235,
+  "scalarLeaves": 31513,
+  "batches": 343,
+  "acquisitionBenchmark": {
+    "enabled": true,
+    "requestedDurationSeconds": 3,
+    "requestedSamplesPerSecond": 100000,
+    "actualSamplesPerSecond": 74,
+    "meanIntervalMicros": 13546.113574660638,
+    "p95IntervalMicros": 21278.600000000002,
+    "p99IntervalMicros": 24782.6,
+    "readErrors": 0
+  },
+  "sourceBreakpoint": {
+    "enabled": false
+  },
+  "debugControl": {
+    "enabled": false
+  },
+  "plotProtection": {
+    "enabled": true,
+    "breakpointBlocked": true,
+    "pauseAllowed": true,
+    "continueAllowed": true,
+    "pauseResponseMs": 19.26,
+    "memoryWriteBlocked": true,
+    "typedLiveWatchWriteAvailable": true
+  },
+  "subscriptionUpdate": {
+    "autoPaused": true
+  },
+  "runningWrite": {
+    "enabled": false
+  },
+  "actualCollectionSeconds": 8.005,
+  "reportedBatchSamplePeriodNs": 11749700,
+  "reportedBatchSamplesPerSecond": 85.10855596313097,
+  "droppedFrames": 0,
+  "variables": [
+    {
+      "expression": "SysTime.ms",
+      "type": "uint16_t",
+      "address": "0x2000123c",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 519,
+      "last": 529,
+      "min": 0,
+      "max": 998
+    },
+    {
+      "expression": "SysTime.us",
+      "type": "uint16_t",
+      "address": "0x2000123e",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 16,
+      "last": 16,
+      "min": 13,
+      "max": 37
+    },
+    {
+      "expression": "pendulum_debug.thread_time",
+      "type": "float",
+      "address": "0x20008b40",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 1024,
+      "last": 960,
+      "min": 960,
+      "max": 1024
+    },
+    {
+      "expression": "pendulum_debug.pitch",
+      "type": "float",
+      "address": "0x20008a9c",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.yaw",
+      "type": "float",
+      "address": "0x20008ae4",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "debug_ins.accel[0]",
+      "type": "float",
+      "address": "0x20008a54",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "debug_ins.accel[1]",
+      "type": "float",
+      "address": "0x20008a58",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "debug_temp",
+      "type": "float",
+      "address": "0x20007130",
+      "samples": 639,
+      "observedSamplesPerSecond": 79.82,
+      "first": 3541.125,
+      "last": 3541.125,
+      "min": 3541.125,
+      "max": 3541.125
+    }
+  ]
+}

@@ -234,6 +234,7 @@ fn run_worker(
     let mut statistics_started = Instant::now();
     let mut sampled_frames = 0_u64;
     let mut previous_acquisition_end_ns = None;
+    let mut frame_cost_ns = None;
     let mut next_status_poll = Instant::now();
     let mut running = true;
     while running {
@@ -244,6 +245,7 @@ fn run_worker(
                 let subscriptions_changed = matches!(&envelope.command, WorkerCommand::SetSubscriptions { .. });
                 running = handle_command(&mut *backend, envelope, &events, &mut state, &mut watches, &mut requested_hz, &mut background);
                 if subscriptions_changed || state.target_state != previous_state {
+                    frame_cost_ns = None;
                     next_acquisition = Instant::now();
                     previous_acquisition_end_ns = None;
                     background.previous_end_ns = None;
@@ -260,6 +262,7 @@ fn run_worker(
                 let subscriptions_changed = matches!(&envelope.command, WorkerCommand::SetSubscriptions { .. });
                 running = handle_command(&mut *backend, envelope, &events, &mut state, &mut watches, &mut requested_hz, &mut background);
                 if subscriptions_changed || state.target_state != previous_state {
+                    frame_cost_ns = None;
                     next_acquisition = Instant::now();
                     previous_acquisition_end_ns = None;
                     background.previous_end_ns = None;
@@ -294,11 +297,12 @@ fn run_worker(
                     next_status_poll = schedule_next_status_poll(Instant::now(), !watches.is_empty());
                 }
                 if is_executing(&state.target_state) && !watches.is_empty() && (requested_hz >= 500 || Instant::now() >= next_acquisition) {
-                    let frames = ((requested_hz as usize + 499) / 500).max(1);
+                    let frames = acquisition_frames(requested_hz, frame_cost_ns);
                     next_acquisition = Instant::now() + Duration::from_secs_f64(frames as f64 / requested_hz as f64);
                     let acquisition_started_ns = elapsed_ns(started);
                     let sample_result = backend.sample(&watches, frames);
                     let acquisition_finished_ns = elapsed_ns(started);
+                    frame_cost_ns = Some((acquisition_finished_ns.saturating_sub(acquisition_started_ns) / frames as u64).max(1));
                     match sample_result {
                         Ok(values) => {
                             let timing = measured_batch_timing(
@@ -337,6 +341,14 @@ fn run_worker(
         }
     }
     backend.disconnect();
+}
+
+// Keep a high requested rate from turning a slow USB probe into a seconds-long
+// uninterruptible read. Start with one frame, then budget about 2 ms per call.
+fn acquisition_frames(requested_hz: u32, frame_cost_ns: Option<u64>) -> usize {
+    let requested = (requested_hz.max(1) as usize).div_ceil(500);
+    let budget = frame_cost_ns.map_or(1, |cost| (2_000_000 / cost.max(1)).max(1) as usize);
+    requested.min(budget)
 }
 
 /// Low-rate consumers get their own real reads and timestamped batches. Never
@@ -689,6 +701,15 @@ fn make_session_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn high_requested_rate_keeps_slow_probe_batches_responsive() {
+        assert_eq!(super::acquisition_frames(100_000, None), 1);
+        assert_eq!(super::acquisition_frames(100_000, Some(8_000_000)), 1);
+        assert_eq!(super::acquisition_frames(100_000, Some(100_000)), 20);
+        assert_eq!(super::acquisition_frames(100_000, Some(1_000)), 200);
+        assert_eq!(super::acquisition_frames(20, Some(1_000)), 1);
+    }
+
     use std::{
         path::Path,
         sync::{
