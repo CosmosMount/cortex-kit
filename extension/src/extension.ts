@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { registerFlashOutput } from './flashOutput';
 import { configuredProgramCandidates } from './launchConfig';
 import { validateLiveWatchInput } from './liveWatchModel';
 import { inspectElf, isDwarfImage, resolveConfiguredPath } from './offlineCatalog';
@@ -21,6 +22,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const liveWatchView = vscode.window.createTreeView('cortexKit.liveWatch', { treeDataProvider: liveWatch });
   const peripheralsView = vscode.window.createTreeView('cortexKit.peripherals', { treeDataProvider: peripherals });
   const output = vscode.window.createOutputChannel('Cortex Kit');
+  const flashOutput = vscode.window.createOutputChannel('Cortex Kit Flash');
+  context.subscriptions.push(flashOutput, registerFlashOutput(flashOutput));
   let active: vscode.DebugSession | undefined;
   let latestState: SessionState | undefined;
   let valueRefreshGeneration = 0;
@@ -319,17 +322,70 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await active.customRequest('writeMemory', { memoryReference: `0x${node.register.address.toString(16)}`, data: bytes.toString('base64') });
     await vscode.commands.executeCommand('cortexKit.readRegister', node);
   });
+  register('cortexKit.build', async () => {
+    try { await vscode.commands.executeCommand('cmake.build'); }
+    catch (error) { void vscode.window.showErrorMessage(`Cortex Kit build failed: ${String(error)}`); }
+  });
+  let flashing = false;
   register('cortexKit.flash', async () => {
-    if (!active) { void vscode.window.showErrorMessage('Start or attach a Cortex Kit session first.'); return; }
-    if (active.configuration.plotOnly) { void vscode.window.showErrorMessage('Flashing is disabled in Cortex Kit plot-only mode. Start a normal debug configuration first.'); return; }
-    const program = expandWorkspace(active.configuration.programBinary, active.workspaceFolder);
-    if (!program) { void vscode.window.showErrorMessage('No programBinary is configured.'); return; }
-    await active.customRequest('cortexKit/flash', {
-      path: program,
-      verify: active.configuration.flashing?.verify ?? true,
-      resetAfter: active.configuration.flashing?.resetAfter ?? true,
-    });
-    void vscode.window.showInformationMessage('Cortex Kit flash completed.');
+    if (flashing) { return; }
+    flashing = true;
+    flashOutput.show(true);
+    flashOutput.appendLine(`\n[${new Date().toLocaleTimeString()}] Preparing firmware flash…`);
+    try {
+      if (!active) {
+        const choices = (vscode.workspace.workspaceFolders ?? []).flatMap(folder =>
+          vscode.workspace.getConfiguration('launch', folder.uri).get<vscode.DebugConfiguration[]>('configurations', [])
+            .filter(config => config.type === 'cortex-kit' && config.request === 'launch' && !config.mockProbe && config.programBinary)
+            .map(config => ({ label: config.name, description: folder.name, folder, config })));
+        if (!choices.length) { void vscode.window.showErrorMessage('Run “Cortex Kit: Configure Project” and select a firmware image before flashing.'); return; }
+        const selected = choices.length === 1 ? choices[0] : await vscode.window.showQuickPick(choices, { placeHolder: 'Select firmware to flash' });
+        if (!selected) { return; }
+        flashOutput.appendLine(`Configuration: ${selected.config.name}`);
+        flashOutput.appendLine(selected.config.preLaunchTask
+          ? `Waiting for pre-launch task: ${selected.config.preLaunchTask}`
+          : 'Using existing firmware image (no pre-launch build task).');
+        const name = `Cortex Kit: Flash ${Date.now()}`;
+        let flashSession: vscode.DebugSession | undefined;
+        const listener = vscode.debug.onDidStartDebugSession(session => {
+          if (session.type === 'cortex-kit' && session.name === name) { flashSession = session; }
+        });
+        try {
+          const started = await vscode.debug.startDebugging(selected.folder, {
+            ...selected.config, name, request: 'launch', noDebug: true, stopOnEntry: false,
+            plotOnly: false, flashing: { ...selected.config.flashing, enabled: false },
+          });
+          if (!started || !flashSession) { throw new Error('Flash session did not start; build or connection may have failed or been cancelled.'); }
+          flashOutput.appendLine('Probe connected. Sending flash request…');
+          await flashSession.customRequest('cortexKit/flash', {
+            path: flashSession.configuration.programBinary,
+            verify: selected.config.flashing?.verify ?? true,
+            resetAfter: selected.config.flashing?.resetAfter ?? true,
+          });
+          if (selected.config.flashing?.resetAfter !== false) {
+            await flashSession.customRequest('continue', { threadId: 1 });
+            flashOutput.appendLine('Target resumed.');
+          }
+          void vscode.window.showInformationMessage('Cortex Kit flash completed.');
+        } finally {
+          listener.dispose();
+          if (flashSession) { await vscode.debug.stopDebugging(flashSession); flashOutput.appendLine('Flash session disconnected.'); }
+        }
+        return;
+      }
+      if (active.configuration.plotOnly) { void vscode.window.showErrorMessage('Flashing is disabled in Cortex Kit plot-only mode. Start a normal debug configuration first.'); return; }
+      const program = expandWorkspace(active.configuration.programBinary, active.workspaceFolder);
+      if (!program) { void vscode.window.showErrorMessage('No programBinary is configured.'); return; }
+      await active.customRequest('cortexKit/flash', {
+        path: program,
+        verify: active.configuration.flashing?.verify ?? true,
+        resetAfter: active.configuration.flashing?.resetAfter ?? true,
+      });
+      void vscode.window.showInformationMessage('Cortex Kit flash completed.');
+    } catch (error) {
+      flashOutput.appendLine(`Flash operation failed: ${String(error)}`);
+      void vscode.window.showErrorMessage(`Cortex Kit flash failed: ${String(error)}`);
+    } finally { flashing = false; }
   });
   register('cortexKit.benchmark', async () => {
     if (!active) { void vscode.window.showErrorMessage('Start or attach a Cortex Kit session first.'); return; }

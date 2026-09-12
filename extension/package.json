@@ -25,6 +25,7 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
+  "extensionDependencies": ["ms-vscode.cmake-tools", "ms-vscode.cpptools"],
   "files": ["out/*.js", "media", "resources", "bin", "README.md", "package.json"],
   "scripts": {
     "build": "npm run compile",
@@ -47,6 +48,11 @@
     "typescript": "^5.7.2"
   },
   "contributes": {
+    "keybindings": [
+      { "key": "f5", "command": "workbench.action.debug.start", "when": "workspaceFolderCount > 0 && debugState == inactive" },
+      { "key": "f7", "command": "cortexKit.build", "when": "workspaceFolderCount > 0 && !inDebugMode" },
+      { "key": "f8", "command": "cortexKit.flash", "when": "workspaceFolderCount > 0 && !inDebugMode" }
+    ],
     "debuggers": [{
       "type": "cortex-kit",
       "label": "Cortex Kit",
@@ -97,6 +103,7 @@
       { "command": "cortexKit.importCortexDebug", "title": "Cortex Kit: Import Cortex-Debug Configuration" },
       { "command": "cortexKit.mockDebug", "title": "Cortex Kit: Mock Debug" },
       { "command": "cortexKit.flash", "title": "Cortex Kit: Flash" },
+      { "command": "cortexKit.build", "title": "Cortex Kit: Build" },
       { "command": "cortexKit.benchmark", "title": "Cortex Kit: Run Acquisition Benchmark" },
       { "command": "cortexKit.refresh", "title": "Cortex Kit: Refresh Views", "icon": "$(refresh)" },
       { "command": "cortexKit.searchVariables", "title": "Cortex Kit: Search Global Variables", "icon": "$(search)" },

@@ -49,7 +49,7 @@ Reload the VS Code window after replacing an already-running development build.
 
 ## Configure a firmware workspace
 
-An existing ELF or AXF with DWARF information is enough for variable discovery and debugging. Cortex Kit does not build or modify target firmware and does not require the Arm GNU toolchain when the image already exists.
+An existing ELF or AXF with DWARF information is enough for variable discovery and debugging. Cortex Kit delegates firmware compilation to CMake Tools and does not require the Arm GNU toolchain when the image already exists.
 
 Run **Cortex Kit: Configure Project**, or add configurations such as:
 
@@ -197,3 +197,11 @@ npx vsce publish --packagePath ..\cortex-kit-win32-x64.vsix
 Do not place the token in this repository or a command-line argument. For CI, use Microsoft Entra ID workload identity with `vsce publish --azure-credential`; Microsoft has announced retirement of global Azure DevOps PATs on December 1, 2026.
 
 The authoritative publication procedure is the [VS Code Publishing Extensions guide](https://code.visualstudio.com/api/working-with-extensions/publishing-extension).
+
+### Keyboard shortcuts
+
+- **F5** starts the selected VS Code launch configuration. Select **Cortex Kit: Flash & Debug** to debug firmware; during debugging, F5 continues execution. A configured `preLaunchTask` runs before launch.
+- **F7** runs **Cortex Kit: Build** through CMake Tools (`cmake.build`). Configure the CMake project, kit/toolchain and build preset in CMake Tools first.
+- **F8** flashes the configured firmware and disconnects after starting the target. It selects a Cortex Kit launch configuration and runs its `preLaunchTask` if present; otherwise it uses the existing image. F7/F8 shortcuts are inactive during debugging to preserve debugger shortcuts. **Cortex Kit: Flash** remains available from the command palette in a normal Cortex Kit session.
+
+Installing Cortex Kit also installs its required **CMake Tools** (`ms-vscode.cmake-tools`) and **C/C++** (`ms-vscode.cpptools`) extensions. Install CMake, a build tool such as Ninja, and the firmware compiler separately for compilation. Existing-image debugging and flashing do not require a compiler.
