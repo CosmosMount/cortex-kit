@@ -91,6 +91,8 @@ pub enum WorkerCommand {
     SetSubscriptions {
         watches: Vec<WatchSpec>,
         requested_hz: u32,
+        background_watches: Vec<WatchSpec>,
+        background_hz: u32,
     },
     Benchmark {
         duration: Duration,
@@ -225,6 +227,8 @@ fn run_worker(
     };
     let mut watches = Vec::new();
     let mut requested_hz = 1_000_u32;
+    let mut background = BackgroundAcquisition::default();
+    let mut next_acquisition = Instant::now();
     let mut batch_sequence = 0_u64;
     let started = Instant::now();
     let mut statistics_started = Instant::now();
@@ -237,7 +241,15 @@ fn run_worker(
             recv(urgent) -> message => if let Ok(envelope) = message {
                 let previous_state = state.target_state.clone();
                 let previously_acquiring = !watches.is_empty();
-                running = handle_command(&mut *backend, envelope, &events, &mut state, &mut watches, &mut requested_hz);
+                let subscriptions_changed = matches!(&envelope.command, WorkerCommand::SetSubscriptions { .. });
+                running = handle_command(&mut *backend, envelope, &events, &mut state, &mut watches, &mut requested_hz, &mut background);
+                if subscriptions_changed || state.target_state != previous_state {
+                    next_acquisition = Instant::now();
+                    previous_acquisition_end_ns = None;
+                    background.previous_end_ns = None;
+                    statistics_started = Instant::now();
+                    sampled_frames = 0;
+                }
                 if status_schedule_changed(&previous_state, &state.target_state, previously_acquiring, !watches.is_empty()) {
                     next_status_poll = schedule_next_status_poll(Instant::now(), !watches.is_empty());
                 }
@@ -245,7 +257,15 @@ fn run_worker(
             recv(normal) -> message => if let Ok(envelope) = message {
                 let previous_state = state.target_state.clone();
                 let previously_acquiring = !watches.is_empty();
-                running = handle_command(&mut *backend, envelope, &events, &mut state, &mut watches, &mut requested_hz);
+                let subscriptions_changed = matches!(&envelope.command, WorkerCommand::SetSubscriptions { .. });
+                running = handle_command(&mut *backend, envelope, &events, &mut state, &mut watches, &mut requested_hz, &mut background);
+                if subscriptions_changed || state.target_state != previous_state {
+                    next_acquisition = Instant::now();
+                    previous_acquisition_end_ns = None;
+                    background.previous_end_ns = None;
+                    statistics_started = Instant::now();
+                    sampled_frames = 0;
+                }
                 if status_schedule_changed(&previous_state, &state.target_state, previously_acquiring, !watches.is_empty()) {
                     next_status_poll = schedule_next_status_poll(Instant::now(), !watches.is_empty());
                 }
@@ -273,8 +293,9 @@ fn run_worker(
                     }
                     next_status_poll = schedule_next_status_poll(Instant::now(), !watches.is_empty());
                 }
-                if is_executing(&state.target_state) && !watches.is_empty() {
+                if is_executing(&state.target_state) && !watches.is_empty() && (requested_hz >= 500 || Instant::now() >= next_acquisition) {
                     let frames = ((requested_hz as usize + 499) / 500).max(1);
+                    next_acquisition = Instant::now() + Duration::from_secs_f64(frames as f64 / requested_hz as f64);
                     let acquisition_started_ns = elapsed_ns(started);
                     let sample_result = backend.sample(&watches, frames);
                     let acquisition_finished_ns = elapsed_ns(started);
@@ -304,13 +325,86 @@ fn run_worker(
                         }
                         Err(error) => { previous_acquisition_end_ns = Some(acquisition_finished_ns); state.last_error = Some(error.clone()); state.revision += 1; let _ = events.try_send(WorkerEvent::Error(error)); }
                     }
-                } else {
+                } else if !is_executing(&state.target_state) || watches.is_empty() {
                     previous_acquisition_end_ns = None;
+                }
+                if is_executing(&state.target_state) {
+                    background.sample_if_due(&mut *backend, &events, &mut state, started, &mut batch_sequence);
+                } else {
+                    background.previous_end_ns = None;
                 }
             }
         }
     }
     backend.disconnect();
+}
+
+/// Low-rate consumers get their own real reads and timestamped batches. Never
+/// repeat a cached value in a high-rate batch: that would corrupt plots/FFTs.
+struct BackgroundAcquisition {
+    watches: Vec<WatchSpec>,
+    hz: u32,
+    next: Instant,
+    previous_end_ns: Option<u64>,
+}
+
+impl Default for BackgroundAcquisition {
+    fn default() -> Self {
+        Self {
+            watches: Vec::new(),
+            hz: 20,
+            next: Instant::now(),
+            previous_end_ns: None,
+        }
+    }
+}
+
+impl BackgroundAcquisition {
+    fn sample_if_due(
+        &mut self,
+        backend: &mut dyn Backend,
+        events: &Sender<WorkerEvent>,
+        state: &mut SessionState,
+        started: Instant,
+        sequence: &mut u64,
+    ) {
+        if self.watches.is_empty() || Instant::now() < self.next {
+            return;
+        }
+        let frames = (self.hz as usize).div_ceil(500);
+        self.next = Instant::now() + Duration::from_secs_f64(frames as f64 / self.hz as f64);
+        let begin = elapsed_ns(started);
+        let result = backend.sample(&self.watches, frames);
+        let end = elapsed_ns(started);
+        let timing = measured_batch_timing(begin, end, frames, self.previous_end_ns);
+        self.previous_end_ns = Some(end);
+        match result {
+            Ok(values) => {
+                *sequence += 1;
+                let batch = SampleBatch {
+                    protocol_version: 1,
+                    session_id: state.session_id.clone(),
+                    program_generation: state.program_generation,
+                    stream_epoch: state.stream_epoch,
+                    batch_sequence: *sequence,
+                    channel_ids: self.watches.iter().map(|watch| watch.id.clone()).collect(),
+                    sample_count: frames as u32,
+                    start_timestamp_ns: timing.start_timestamp_ns,
+                    sample_period_ns: timing.sample_period_ns,
+                    dropped_frames: state.dropped_frames,
+                    values,
+                };
+                if events.try_send(WorkerEvent::Samples(batch)).is_err() {
+                    state.dropped_frames += frames as u64;
+                }
+            }
+            Err(error) => {
+                state.last_error = Some(error.clone());
+                state.revision += 1;
+                let _ = events.try_send(WorkerEvent::Error(error));
+            }
+        }
+    }
 }
 
 fn handle_command(
@@ -320,6 +414,7 @@ fn handle_command(
     state: &mut SessionState,
     watches: &mut Vec<WatchSpec>,
     requested_hz: &mut u32,
+    background: &mut BackgroundAcquisition,
 ) -> bool {
     let Envelope { command, reply } = envelope;
     if matches!(command, WorkerCommand::Shutdown) {
@@ -404,7 +499,17 @@ fn handle_command(
         WorkerCommand::SetSubscriptions {
             watches: next,
             requested_hz: hz,
+            background_watches,
+            background_hz,
         } => {
+            *background = BackgroundAcquisition {
+                watches: background_watches
+                    .into_iter()
+                    .filter(|watch| !next.iter().any(|fast| fast.id == watch.id))
+                    .collect(),
+                hz: background_hz.clamp(1, 1_000),
+                ..Default::default()
+            };
             *watches = next;
             *requested_hz = hz.clamp(1, 100_000);
             Ok(WorkerReply::Ok)
@@ -675,6 +780,75 @@ mod tests {
             WorkerReply::State(state) => state,
             other => panic!("expected state reply, got {other:?}"),
         }
+    }
+
+    fn collect_rates(
+        worker: &WorkerHandle,
+        duration: Duration,
+    ) -> std::collections::HashMap<String, usize> {
+        let deadline = Instant::now() + duration;
+        let mut counts = std::collections::HashMap::new();
+        let mut last_times = std::collections::HashMap::new();
+        let mut last_sequence = 0;
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            if let Ok(WorkerEvent::Samples(batch)) = worker.events.recv_timeout(remaining) {
+                assert!(batch.batch_sequence > last_sequence);
+                last_sequence = batch.batch_sequence;
+                assert_eq!(
+                    batch.values.len(),
+                    batch.channel_ids.len() * batch.sample_count as usize
+                );
+                for id in batch.channel_ids {
+                    if let Some(previous) = last_times.insert(id.clone(), batch.start_timestamp_ns)
+                    {
+                        assert!(batch.start_timestamp_ns > previous);
+                    }
+                    *counts.entry(id).or_default() += batch.sample_count as usize;
+                }
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn mixed_rates_emit_real_separate_batches_and_remove_shared_background_channels() {
+        let worker = spawn_worker(crate::MockBackend::default());
+        worker.call(WorkerCommand::Connect(config())).unwrap();
+        let watch = |id: &str, address| WatchSpec {
+            id: id.into(),
+            address,
+            byte_width: 4,
+            scalar_kind: ScalarKind::Float32,
+        };
+        let fast = watch("mock.sine", 0x20000000);
+        worker
+            .call(WorkerCommand::SetSubscriptions {
+                watches: vec![fast.clone()],
+                requested_hz: 1000,
+                background_watches: vec![fast, watch("mock.ramp", 0x20000004)],
+                background_hz: 20,
+            })
+            .unwrap();
+        worker.call(WorkerCommand::Resume).unwrap();
+        let counts = collect_rates(&worker, Duration::from_millis(600));
+        assert!((5..=14).contains(&counts["mock.ramp"]), "{counts:?}");
+        assert!(counts["mock.sine"] > counts["mock.ramp"] * 5, "{counts:?}");
+        worker.call(WorkerCommand::Halt).unwrap();
+        while worker.events.try_recv().is_ok() {}
+        assert!(collect_rates(&worker, Duration::from_millis(80)).is_empty());
+        worker
+            .call(WorkerCommand::SetSubscriptions {
+                watches: vec![watch("mock.ramp", 0x20000004)],
+                requested_hz: 20,
+                background_watches: vec![],
+                background_hz: 20,
+            })
+            .unwrap();
+        worker.call(WorkerCommand::Resume).unwrap();
+        let counts = collect_rates(&worker, Duration::from_millis(300));
+        assert!((3..=7).contains(&counts["mock.ramp"]), "{counts:?}");
+        assert!(!counts.contains_key("mock.sine"));
+        worker.call(WorkerCommand::Shutdown).unwrap();
     }
 
     #[test]

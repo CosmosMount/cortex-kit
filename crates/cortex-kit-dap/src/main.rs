@@ -584,27 +584,38 @@ fn handle_request(
                 .and_then(Value::as_u64)
                 .unwrap_or(1_000) as u32;
             let descriptors = catalog.lock().unwrap();
-            let watches = arguments
-                .get("ids")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .filter_map(|id| find_variable(&descriptors, id))
-                .filter_map(|item| {
-                    item.address.map(|address| WatchSpec {
-                        id: item.id.clone(),
-                        address,
-                        byte_width: item.byte_width,
-                        scalar_kind: item.scalar_kind,
+            let resolve_watches = |key: &str| -> Vec<WatchSpec> {
+                arguments
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .filter_map(|id| find_variable(&descriptors, id))
+                    .filter_map(|item| {
+                        item.address.map(|address| WatchSpec {
+                            id: item.id.clone(),
+                            address,
+                            byte_width: item.byte_width,
+                            scalar_kind: item.scalar_kind,
+                        })
                     })
-                })
-                .collect();
+                    .collect()
+            };
+            let watches = resolve_watches("ids");
+            let background_watches = resolve_watches("backgroundIds");
+            let background_hz = arguments
+                .get("backgroundSamplesPerSecond")
+                .and_then(Value::as_u64)
+                .unwrap_or(20)
+                .clamp(1, 1_000) as u32;
             drop(descriptors);
             let (_, auto_paused) = with_auto_pause(worker, state, || {
                 worker.call(WorkerCommand::SetSubscriptions {
                     watches,
                     requested_hz,
+                    background_watches,
+                    background_hz,
                 })
             })?;
             Ok(json!({"autoPaused":auto_paused}))

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import net from 'node:net';
@@ -36,7 +37,7 @@ if (!['debug', 'release'].includes(backendProfile)) {
   console.error(`backend profile must be debug or release, got ${backendProfile}`);
   process.exit(2);
 }
-const executable = path.join(root, 'target', backendProfile, process.platform === 'win32' ? 'cortex-kit-dap.exe' : 'cortex-kit-dap');
+const executable = process.env.CORTEX_KIT_BACKEND ?? path.join(root, 'target', backendProfile, process.platform === 'win32' ? 'cortex-kit-dap.exe' : 'cortex-kit-dap');
 
 async function main() {
   const seconds = parsePositiveNumber(secondsText, 'seconds', 0.25);
@@ -124,15 +125,27 @@ async function main() {
   }
   assert.ok(selected.length, 'ELF contains no addressable scalar variables');
 
+  const customSelection = process.env.CORTEX_KIT_SELECTION
+    ? JSON.parse(readFileSync(process.env.CORTEX_KIT_SELECTION, 'utf8')) : undefined;
+  if (customSelection) {
+    const ids = [...new Set([...customSelection.ids, ...(customSelection.backgroundIds ?? [])])];
+    selected.splice(0, selected.length, ...ids.map(id => {
+      const variable = leaves.find(item => item.id === id);
+      assert.ok(variable, `selection is missing from current ELF: ${id}`);
+      return variable;
+    }));
+  }
   const subscriptionUpdate = await dap.request('cortexKit/setSubscriptions', {
     ids: selected.map(item => item.id),
     requestedSamplesPerSecond,
+    ...customSelection,
   });
   await dap.request('configurationDone', {});
   const collection = await collectBatches(dataReady.body, seconds);
   const { batches } = collection;
   assert.ok(batches.length, 'no sample batches received');
-
+  const acquisitionState = await dap.request('cortexKit/getState');
+  assert.ok(!acquisitionState.lastError, acquisitionState.lastError);
   let runningWrite = { enabled: false };
   if (verifyRunningWrite) {
     const candidate = leaves.find(item => item.expression === 'AliveThread.tx_thread_id')
@@ -325,6 +338,9 @@ async function main() {
     chip: 'STM32H723VG',
     speedKHz,
     backendProfile,
+    executable,
+    selection: customSelection,
+    acquisitionState,
     requestedSamplesPerSecond,
     channelProfile,
     channelCount: selected.length,

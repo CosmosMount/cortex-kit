@@ -1,0 +1,293 @@
+{
+  "probe": "auto",
+  "chip": "STM32H723VG",
+  "speedKHz": 10000,
+  "backendProfile": "release",
+  "requestedSamplesPerSecond": 1000,
+  "channelProfile": "representative",
+  "channelCount": 23,
+  "connectUnderReset": false,
+  "durationSeconds": 8,
+  "flashed": false,
+  "plotOnly": false,
+  "rootVariables": 235,
+  "scalarLeaves": 31513,
+  "batches": 714,
+  "acquisitionBenchmark": {
+    "enabled": false
+  },
+  "sourceBreakpoint": {
+    "enabled": false
+  },
+  "debugControl": {
+    "enabled": false
+  },
+  "plotProtection": {
+    "enabled": false
+  },
+  "subscriptionUpdate": {
+    "autoPaused": true
+  },
+  "runningWrite": {
+    "enabled": false
+  },
+  "actualCollectionSeconds": 8.01,
+  "reportedBatchSamplePeriodNs": 4490133,
+  "reportedBatchSamplesPerSecond": 222.710552226404,
+  "droppedFrames": 0,
+  "variables": [
+    {
+      "expression": "SysTime.s",
+      "type": "uint32_t",
+      "address": "0x20001238",
+      "samples": 3178,
+      "observedSamplesPerSecond": 396.77,
+      "first": 493,
+      "last": 501,
+      "min": 493,
+      "max": 501
+    },
+    {
+      "expression": "SysTime.ms",
+      "type": "uint16_t",
+      "address": "0x2000123c",
+      "samples": 3178,
+      "observedSamplesPerSecond": 396.77,
+      "first": 784,
+      "last": 786,
+      "min": 0,
+      "max": 999
+    },
+    {
+      "expression": "SysTime.us",
+      "type": "uint16_t",
+      "address": "0x2000123e",
+      "samples": 3178,
+      "observedSamplesPerSecond": 396.77,
+      "first": 14,
+      "last": 14,
+      "min": 13,
+      "max": 43
+    },
+    {
+      "expression": "pendulum_debug.thread_time",
+      "type": "float",
+      "address": "0x20008b40",
+      "samples": 3178,
+      "observedSamplesPerSecond": 396.77,
+      "first": 1024,
+      "last": 992,
+      "min": 960,
+      "max": 1024
+    },
+    {
+      "expression": "pendulum_debug.alphal_dot",
+      "type": "float",
+      "address": "0x20008a6c",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.alphar",
+      "type": "float",
+      "address": "0x20008a70",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0.000018835067749023438,
+      "last": 0.000018835067749023438,
+      "min": 0.000018835067749023438,
+      "max": 0.000018835067749023438
+    },
+    {
+      "expression": "pendulum_debug.alphar_dot",
+      "type": "float",
+      "address": "0x20008a74",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.xref",
+      "type": "float",
+      "address": "0x20008a7c",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.vref",
+      "type": "float",
+      "address": "0x20008a84",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.llen",
+      "type": "float",
+      "address": "0x20008a88",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0.1385623663663864,
+      "last": 0.1385623663663864,
+      "min": 0.1385623663663864,
+      "max": 0.1385623663663864
+    },
+    {
+      "expression": "pendulum_debug.rlen",
+      "type": "float",
+      "address": "0x20008a8c",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0.1385623663663864,
+      "last": 0.1385623663663864,
+      "min": 0.1385623663663864,
+      "max": 0.1385623663663864
+    },
+    {
+      "expression": "pendulum_debug.l_ref",
+      "type": "float",
+      "address": "0x20008a90",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0.1599999964237213,
+      "last": 0.1599999964237213,
+      "min": 0.1599999964237213,
+      "max": 0.1599999964237213
+    },
+    {
+      "expression": "pendulum_debug.llenref",
+      "type": "float",
+      "address": "0x20008a94",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.rlenref",
+      "type": "float",
+      "address": "0x20008a98",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.pitch",
+      "type": "float",
+      "address": "0x20008a9c",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.pitch_dot",
+      "type": "float",
+      "address": "0x20008aa0",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.Cl",
+      "type": "float",
+      "address": "0x20008aa4",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.Cr",
+      "type": "float",
+      "address": "0x20008aa8",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.Twl",
+      "type": "float",
+      "address": "0x20008aac",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.Tpl",
+      "type": "float",
+      "address": "0x20008ab4",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.Tpr",
+      "type": "float",
+      "address": "0x20008ab8",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "pendulum_debug.Fsl",
+      "type": "float",
+      "address": "0x20008abc",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 29.5318603515625,
+      "last": 29.5318603515625,
+      "min": 29.5318603515625,
+      "max": 29.5318603515625
+    },
+    {
+      "expression": "pendulum_debug.Fsr",
+      "type": "float",
+      "address": "0x20008ac0",
+      "samples": 145,
+      "observedSamplesPerSecond": 18.1,
+      "first": 29.5318603515625,
+      "last": 29.5318603515625,
+      "min": 29.5318603515625,
+      "max": 29.5318603515625
+    }
+  ]
+}

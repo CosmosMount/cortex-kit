@@ -29,7 +29,7 @@ test('mock DAP streams and permits only typed Live Watch writes in plot-only mod
   t.diagnostic('nested variable catalog received');
   const dataReady = await nextMatching(messages, message => message.type === 'event' && message.event === 'cortexKit.dataChannelReady');
   t.diagnostic('data channel announced');
-  await request('cortexKit/setSubscriptions', { ids: ['mock.sine', 'mock.ramp'], requestedSamplesPerSecond: 1000 });
+  await request('cortexKit/setSubscriptions', { ids: ['mock.sine'], requestedSamplesPerSecond: 1000, backgroundIds: ['mock.sine', 'mock.ramp'], backgroundSamplesPerSecond: 20 });
   const frame = new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: '127.0.0.1', port: dataReady.body.port }, () => socket.write(`${dataReady.body.token}\n`));
     let data = Buffer.alloc(0); const timer = setTimeout(() => { socket.destroy(); reject(new Error('sample frame timeout')); }, 3000);

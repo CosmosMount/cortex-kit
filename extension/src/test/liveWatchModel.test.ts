@@ -5,6 +5,7 @@ import {
   latestLiveWatchValues,
   mergeSubscriptionIds,
   selectBatchChannels,
+  splitSubscriptions,
   validateLiveWatchInput,
 } from '../liveWatchModel';
 import { SampleBatch } from '../types';
@@ -15,6 +16,18 @@ const batch: SampleBatch = {
   channelIds: ['plot-only', 'shared', 'watch-only'],
   values: [1, 2, 3, 4, 5, 6],
 };
+
+test('Plot subscriptions keep watch-only channels slow and reuse shared channels', () => {
+  assert.deepEqual(splitSubscriptions(['plot', 'shared'], ['shared', 'watch', 'watch'], 1000, 20), {
+    ids: ['plot', 'shared'], requestedSamplesPerSecond: 1000,
+    backgroundIds: ['watch'], backgroundSamplesPerSecond: 20,
+  });
+  assert.deepEqual(splitSubscriptions([], ['watch'], 1000, 20), {
+    ids: ['watch'], requestedSamplesPerSecond: 20,
+    backgroundIds: [], backgroundSamplesPerSecond: 20,
+  });
+  assert.deepEqual(splitSubscriptions([], [], 1000, 20).ids, []);
+});
 
 test('Live Watch and Plot keep separate displays while sharing one deduplicated hardware subscription', () => {
   assert.deepEqual(mergeSubscriptionIds(['plot-only', 'shared'], ['shared', 'watch-only']), ['plot-only', 'shared', 'watch-only']);

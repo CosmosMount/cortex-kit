@@ -64,3 +64,15 @@ export function validateLiveWatchInput(value: string, kind: ScalarKind): string 
 export function flattenLiveWatchCatalog(variables: VariableDescriptor[]): VariableDescriptor[] {
   return variables.flatMap(variable => [variable, ...flattenLiveWatchCatalog(variable.children)]);
 }
+
+/** Shared channels use Plot samples; watch-only channels stay at the watch rate. */
+export function splitSubscriptions(plotIds: string[], liveWatchIds: string[], plotRate: number, watchRate: number) {
+  const ids = [...new Set(plotIds.length ? plotIds : liveWatchIds)];
+  const foreground = new Set(ids);
+  return {
+    ids,
+    requestedSamplesPerSecond: Math.max(1, plotIds.length ? plotRate : watchRate),
+    backgroundIds: [...new Set(liveWatchIds)].filter(id => !foreground.has(id)),
+    backgroundSamplesPerSecond: Math.max(1, Math.min(1000, watchRate)),
+  };
+}

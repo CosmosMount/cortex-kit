@@ -2,7 +2,7 @@ import * as net from 'node:net';
 import * as vscode from 'vscode';
 import { BatchDecoder } from './binaryProtocol';
 import { expressionDependencies } from './expression';
-import { latestLiveWatchValues, mergeSubscriptionIds, selectBatchChannels } from './liveWatchModel';
+import { latestLiveWatchValues, splitSubscriptions, selectBatchChannels } from './liveWatchModel';
 import { appendDerivedChannels, expandVariableSelections, expressionDescriptor, flattenVariables, isVariableSelection, plottableLeaves, reorderCharts, resolveSubscriptionIds, restoreLayoutExpressions } from './plotModel';
 import { ChartArrangement, ChartLayout, LiveWatchValue, SampleBatch, SessionState, VariableDescriptor } from './types';
 
@@ -20,6 +20,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private state?: SessionState;
   private activeSession?: vscode.DebugSession;
   private liveWatchIds: string[] = [];
+  private plotSubscriptionIds = new Set<string>();
   private readonly liveWatchValues = new vscode.EventEmitter<LiveWatchValue[]>();
   readonly onDidReceiveLiveWatchValues = this.liveWatchValues.event;
   private pendingLiveWatchValues = new Map<string, LiveWatchValue>();
@@ -119,7 +120,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private acceptBatch(batch: SampleBatch): void {
     if (this.state && (batch.sessionId !== this.state.sessionId || batch.programGeneration !== this.state.programGeneration || batch.streamEpoch !== this.state.streamEpoch)) { return; }
     this.queueLiveWatchValues(latestLiveWatchValues(batch, this.liveWatchIds));
-    if (this.view?.visible) {
+    if (this.view?.visible && batch.channelIds.some(id => this.plotSubscriptionIds.has(id))) {
       const displayedIds = new Set(this.layouts.flatMap(chart => chart.variableIds));
       const plotted = selectBatchChannels(appendDerivedChannels(batch, this.layouts, this.catalog), displayedIds);
       if (plotted.channelIds.length) { this.post({ type: 'samples', batch: plotted }); }
@@ -171,14 +172,14 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private async updateSubscriptions(): Promise<void> {
     if (!this.activeSession) { return; }
     const plotIds = resolveSubscriptionIds(this.layouts, this.catalog);
-    const ids = mergeSubscriptionIds(plotIds, this.liveWatchIds);
-    const plotRate = plotIds.length ? Number(this.activeSession.configuration.acquisition?.requestedSamplesPerSecond ?? 1000) : 0;
-    const liveWatchRate = this.liveWatchIds.length ? vscode.workspace.getConfiguration('cortexKit').get('liveWatchSamplesPerSecond', 20) : 0;
-    const requestedSamplesPerSecond = Math.max(1, plotRate, liveWatchRate);
-    const key = JSON.stringify([this.activeSession.id, ids, requestedSamplesPerSecond]);
+    this.plotSubscriptionIds = new Set(plotIds);
+    const plotRate = Number(this.activeSession.configuration.acquisition?.requestedSamplesPerSecond ?? 1000);
+    const liveWatchRate = vscode.workspace.getConfiguration('cortexKit').get('liveWatchSamplesPerSecond', 20);
+    const subscription = splitSubscriptions(plotIds, this.liveWatchIds, plotRate, liveWatchRate);
+    const key = JSON.stringify([this.activeSession.id, subscription]);
     if (key === this.lastSubscriptionKey) { return; }
     this.lastSubscriptionKey = key;
-    try { await this.activeSession.customRequest('cortexKit/setSubscriptions', { ids, requestedSamplesPerSecond }); }
+    try { await this.activeSession.customRequest('cortexKit/setSubscriptions', subscription); }
     catch (error) { if (this.lastSubscriptionKey === key) { this.lastSubscriptionKey = undefined; } this.post({ type: 'streamError', message: `Subscription failed: ${String(error)}` }); }
   }
   private pushSnapshot(): void { this.post({ type: 'snapshot', charts: this.layouts, arrangement: this.arrangement, variables: this.catalog, state: this.state, refreshRate: vscode.workspace.getConfiguration('cortexKit').get('chartRefreshRate', 30), historySeconds: vscode.workspace.getConfiguration('cortexKit').get('historySeconds', 30) }); void this.updateSubscriptions(); }
