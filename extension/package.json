@@ -90,7 +90,8 @@
     }],
     "viewsContainers": { "panel": [
       { "id": "cortex-kit-panel", "title": "Plot", "icon": "resources/cortex-kit.svg" },
-      { "id": "cortex-kit-sample", "title": "Sample", "icon": "resources/cortex-kit.svg" }
+      { "id": "cortex-kit-sample", "title": "Sample", "icon": "resources/cortex-kit.svg" },
+      { "id": "cortex-kit-threads", "title": "Threads", "icon": "resources/cortex-kit.svg" }
     ] },
     "views": {
       "debug": [
@@ -101,6 +102,9 @@
       ],
       "cortex-kit-panel": [
         { "id": "cortexKit.plots", "name": "Plot", "type": "webview", "order": 1 }
+      ],
+      "cortex-kit-threads": [
+        { "id": "cortexKit.threads", "name": "Threads", "type": "webview", "visibility": "visible" }
       ],
       "cortex-kit-sample": [
         { "id": "cortexKit.sample", "name": "Sample", "type": "webview", "order": 1, "visibility": "visible" }

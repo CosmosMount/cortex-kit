@@ -37,6 +37,33 @@ struct RawDie {
     children: Vec<usize>,
 }
 
+/// RTOS structure templates at address zero. Member addresses are DWARF offsets,
+/// not target pointers; these templates must never enter the watch catalog.
+pub fn load_rtos_type_layouts(path: impl AsRef<Path>) -> Result<Vec<VariableDescriptor>> {
+    let bytes = fs::read(path)?;
+    let file = object::File::parse(bytes.as_slice())?;
+    anyhow::ensure!(file.is_little_endian() && !file.is_64(), "RTOS inspection requires a 32-bit little-endian Cortex-M ELF");
+    let dwarf = load_dwarf(&file, RunTimeEndian::Little)?;
+    let mut dies = HashMap::new();
+    let mut variables = Vec::new();
+    let mut units = dwarf.units();
+    while let Some(header) = units.next()? {
+        let unit = dwarf.unit(header)?;
+        collect_unit(&dwarf, &unit, &mut dies, &mut variables)?;
+    }
+    let mut result = Vec::new();
+    for name in ["TX_THREAD_STRUCT", "TX_THREAD", "tskTaskControlBlock", "TCB_t", "xLIST", "List_t", "xLIST_ITEM", "ListItem_t"] {
+        let mut candidates = dies.iter().filter(|(_, die)| {
+            die.name.as_deref() == Some(name) && matches!(die.tag,
+                constants::DW_TAG_structure_type | constants::DW_TAG_typedef)
+        }).map(|(key, _)| descriptor_for_type(&dies, *key, name, name, 0, false, 1, 0, &mut HashSet::new()))
+            .filter(|value| !value.children.is_empty()).collect::<Vec<_>>();
+        candidates.sort_by_key(|value| std::cmp::Reverse(value.children.len()));
+        if let Some(value) = candidates.into_iter().next() { result.push(value); }
+    }
+    Ok(result)
+}
+
 /// Build a typed global/static variable catalog directly from ELF/AXF DWARF.
 /// If usable DWARF is unavailable, data symbols remain available as untyped
 /// scalar values so an external GNU toolchain is never required at runtime.

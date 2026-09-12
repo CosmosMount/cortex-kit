@@ -268,3 +268,16 @@ Measure `variables[].observedSamplesPerSecond` separately for the Plot and backg
 To collect a real CSV with the production frame selector and parser in the hardware harness, set `CORTEX_KIT_CSV` to a writable output file and `CORTEX_KIT_CSV_RATE` to the recording rate before invoking `hardware-dap-smoke.mjs`. The optional `CORTEX_KIT_SELECTION` fixture specifies the foreground and background groups. The harness records the foreground group, reopens the CSV and verifies its row and column counts. Normal application recording uses a streaming writer rather than retaining the whole acquisition in memory.
 
 A 2026-09-12 ST-Link / STM32H723VG run with 4 foreground channels and 19 background watches, foreground requested at 5000 S/s, and CSV requested at 200 S/s wrote **1001 rows over 5.000845 s**, **199.966 S/s** observed. CSV reimport passed, with zero adapter errors and zero dropped frames. See `performance/2026-09-12/recorder-hardware.json` for the precise workload and `recorder-hardware.csv` for the data. The browser preview was checked for curve selection, wheel zoom, hover readout and reset, with no JavaScript console errors.
+
+
+## RTOS thread inspection
+
+`npm test --prefix extension` covers ThreadX and FreeRTOS dynamic-list decoding, corrupt list detection, optional runtime/stack fields, counter wrap/reset, rolling occupancy, and hidden/paused/disposed view lifecycle. FreeRTOS validation currently uses memory fixtures; the hardware run below uses ThreadX.
+
+After compiling the extension and release backend, run the read-only hardware check:
+
+```powershell
+node tests/rtos-hardware-smoke.mjs <matching-firmware.elf> <probe-rs-chip> <report.json> [selection.json]
+```
+
+This attaches without reset/flashing and reads thread snapshots for ten seconds. The optional selection file uses the existing foreground/background subscription format. Results from WBR2026 on 2026-09-12 are in `performance/2026-09-12/threads-hardware.json`: eight ThreadX threads, eight snapshots, 73 current-thread observations and zero snapshot errors. With 19 Live Watch + 4 Plot channels, the backend's reported sample rate was 1131.31 S/s before and 1083.35 S/s with thread reads (~4.2% lower in this run). These are short-run observations, not a general performance guarantee. The firmware did not expose execution-time counters; occupancy is sampled, not cycle-accurate.

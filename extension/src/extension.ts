@@ -8,6 +8,7 @@ import { inspectElf, isDwarfImage, resolveConfiguredPath } from './offlineCatalo
 import { expandVariableSelections, isPlottableVariable, isVariableSelection, plottableLeaves } from './plotModel';
 import { PlotViewProvider } from './plots';
 import { SampleRecorder } from './recorder';
+import { ThreadsView } from './threads';
 import { configureProject, defaultBackendPath, expandWorkspace, importCortexDebugConfiguration } from './projectConfig';
 import { inspectSvd } from './svdCatalog';
 import { SessionState, SvdTree, VariableDescriptor } from './types';
@@ -20,6 +21,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const sessionView = new SessionProvider();
   const plots = new PlotViewProvider(context);
   const recorder = new SampleRecorder(context, plots);
+  const threads = new ThreadsView(context, plots);
   const variablesView = vscode.window.createTreeView('cortexKit.variables', { treeDataProvider: variables });
   const liveWatchView = vscode.window.createTreeView('cortexKit.liveWatch', { treeDataProvider: liveWatch });
   const peripheralsView = vscode.window.createTreeView('cortexKit.peripherals', { treeDataProvider: peripherals });
@@ -89,6 +91,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider('cortexKit.sample', recorder, { webviewOptions: { retainContextWhenHidden: true } }),
     plots,
     recorder,
+    threads,
+    vscode.window.registerWebviewViewProvider('cortexKit.threads', threads, { webviewOptions: { retainContextWhenHidden: true } }),
     output,
     offlineIndex,
     svdIndex,

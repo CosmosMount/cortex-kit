@@ -1,0 +1,698 @@
+{
+  "rtos": "ThreadX",
+  "layouts": [
+    {
+      "name": "TX_THREAD_STRUCT",
+      "fields": 38
+    },
+    {
+      "name": "TX_THREAD",
+      "fields": 38
+    }
+  ],
+  "baseline": {
+    "actualSamplesPerSecond": 1131.3080471429957,
+    "chip": "STM32H723VG",
+    "droppedFrames": 0,
+    "lastError": null,
+    "probeName": "STLink V2-1 (00220015480000014E575152)",
+    "programGeneration": 0,
+    "revision": 5,
+    "sessionId": "1dac-18d47e3114102768",
+    "stopId": 1,
+    "streamEpoch": 2,
+    "targetState": "running"
+  },
+  "state": {
+    "actualSamplesPerSecond": 1083.3477034271057,
+    "chip": "STM32H723VG",
+    "droppedFrames": 0,
+    "lastError": null,
+    "probeName": "STLink V2-1 (00220015480000014E575152)",
+    "programGeneration": 0,
+    "revision": 15,
+    "sessionId": "1dac-18d47e3114102768",
+    "stopId": 1,
+    "streamEpoch": 2,
+    "targetState": "running"
+  },
+  "errors": [],
+  "snapshots": [
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Sleeping",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 506068
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Semaphore wait",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19654
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10136
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8091
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1012214
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1012235
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1012256
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14083
+        }
+      ],
+      "current": 0,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    },
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Sleeping",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 506691
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Semaphore wait",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19678
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10149
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8101
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1013455
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1013478
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1013498
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14096
+        }
+      ],
+      "current": 0,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    },
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Sleeping",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 507335
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Semaphore wait",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19704
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10162
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8111
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Ready",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1014749
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1014773
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1014794
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14109
+        }
+      ],
+      "current": 0,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    },
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Sleeping",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 507961
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Semaphore wait",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19728
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10174
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8121
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1015996
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1016019
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1016039
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14121
+        }
+      ],
+      "current": 0,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    },
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Sleeping",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 508618
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Semaphore wait",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19754
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10187
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8132
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1017306
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1017334
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1017357
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14134
+        }
+      ],
+      "current": 0,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    },
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Sleeping",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 509232
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Semaphore wait",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19778
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10200
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8142
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Ready",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1018535
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1018555
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1018576
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14146
+        }
+      ],
+      "current": 0,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    },
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Sleeping",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 509863
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Semaphore wait",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19802
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10212
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8152
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1019800
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1019823
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1019848
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14159
+        }
+      ],
+      "current": 0,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    },
+    {
+      "rtos": "ThreadX",
+      "threads": [
+        {
+          "address": 536876312,
+          "name": "AliveThread",
+          "state": "Running",
+          "priority": 10,
+          "stackBytes": 512,
+          "stackUsed": 296,
+          "runs": 510507
+        },
+        {
+          "address": 536894332,
+          "name": "RemoterThread",
+          "state": "Sleeping",
+          "priority": 2,
+          "stackBytes": 1024,
+          "stackUsed": 480,
+          "runs": 19827
+        },
+        {
+          "address": 536886056,
+          "name": "IMUThread",
+          "state": "Sleeping",
+          "priority": 3,
+          "stackBytes": 4096,
+          "stackUsed": 1276,
+          "runs": 10225
+        },
+        {
+          "address": 536890356,
+          "name": "IMUTempThread",
+          "state": "Sleeping",
+          "priority": 4,
+          "stackBytes": 1024,
+          "stackUsed": 432,
+          "runs": 8162
+        },
+        {
+          "address": 536891556,
+          "name": "RefereeThread",
+          "state": "Ready",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 476,
+          "runs": 1021091
+        },
+        {
+          "address": 536899932,
+          "name": "PendulumThread",
+          "state": "Sleeping",
+          "priority": 6,
+          "stackBytes": 6144,
+          "stackUsed": 4532,
+          "runs": 1021112
+        },
+        {
+          "address": 536895560,
+          "name": "FunctionThread",
+          "state": "Sleeping",
+          "priority": 7,
+          "stackBytes": 4096,
+          "stackUsed": 1452,
+          "runs": 1021135
+        },
+        {
+          "address": 536906568,
+          "name": "UIThread",
+          "state": "Sleeping",
+          "priority": 8,
+          "stackBytes": 2048,
+          "stackUsed": 600,
+          "runs": 14172
+        }
+      ],
+      "current": 536876312,
+      "notes": [
+        "运行中读取为非原子快照；状态可能在读取期间变化。栈已用按保存的 SP 估算，不是高水位。"
+      ]
+    }
+  ],
+  "observations": 73,
+  "shares": {
+    "0": 54.79452054794515,
+    "536876312": 20.54794520547945,
+    "536891556": 2.73972602739726,
+    "536895560": 4.10958904109589,
+    "536899932": 17.80821917808219
+  }
+}

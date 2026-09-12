@@ -11,7 +11,7 @@ use std::{
 use base64::Engine;
 use cortex_kit_core::{
     Expr, ScalarKind, SessionState, SourceIndex, TargetState, VariableDescriptor,
-    evaluate_expression, load_elf_data_symbols, load_source_index, load_svd, parse_expression,
+    evaluate_expression, load_rtos_type_layouts, load_elf_data_symbols, load_source_index, load_svd, parse_expression,
     resolve_instruction, resolve_source_line,
 };
 use cortex_kit_probe::{
@@ -128,6 +128,7 @@ fn serve(worker: WorkerHandle, mock: bool) -> Result<(), String> {
 
     let catalog = Arc::new(Mutex::new(worker.catalog().to_vec()));
     let sources = Arc::new(Mutex::new(SourceIndex::default()));
+    let rtos_layouts = Arc::new(Mutex::new(Vec::<VariableDescriptor>::new()));
     let breakpoint_sets = Arc::new(Mutex::new(HashMap::<String, Vec<u64>>::new()));
     let mut reader = DapReader::new(io::stdin());
     let mut launched = false;
@@ -145,6 +146,7 @@ fn serve(worker: WorkerHandle, mock: bool) -> Result<(), String> {
             &state,
             &catalog,
             &sources,
+            &rtos_layouts,
             &breakpoint_sets,
             mock,
             &command,
@@ -218,6 +220,7 @@ fn handle_request(
     state: &Arc<Mutex<SessionState>>,
     catalog: &Arc<Mutex<Vec<VariableDescriptor>>>,
     sources: &Arc<Mutex<SourceIndex>>,
+    rtos_layouts: &Arc<Mutex<Vec<VariableDescriptor>>>,
     breakpoint_sets: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
     mock: bool,
     command: &str,
@@ -249,6 +252,7 @@ fn handle_request(
             let config = parse_probe_config(chip, &probe);
             let next = expect_state(worker.call(WorkerCommand::Connect(config))?)?;
             *state.lock().unwrap() = next;
+            rtos_layouts.lock().unwrap().clear();
             if !mock {
                 if let Some(program) = arguments.get("programBinary").and_then(Value::as_str) {
                     if matches!(
@@ -259,6 +263,7 @@ fn handle_request(
                             .as_deref(),
                         Some("elf" | "axf" | "out")
                     ) {
+                        *rtos_layouts.lock().unwrap() = load_rtos_type_layouts(program).unwrap_or_default();
                         if let Ok(variables) = load_elf_data_symbols(program) {
                             *catalog.lock().unwrap() = variables;
                         }
@@ -521,6 +526,7 @@ fn handle_request(
             )
         }
         "cortexKit/getState" => Ok(json!(state.lock().unwrap().clone())),
+        "cortexKit/getRtosLayouts" => Ok(json!({"layouts":rtos_layouts.lock().unwrap().clone()})),
         "cortexKit/getCatalog" => Ok(json!({"variables":catalog.lock().unwrap().clone()})),
         "cortexKit/readValues" => {
             let descriptors = catalog.lock().unwrap();
