@@ -5,10 +5,18 @@
   const histories = new Map();
   const chartsRoot = document.getElementById('charts'); const connection = document.getElementById('connection'); const metrics = document.getElementById('metrics'); const arrangementSelect = document.getElementById('arrangement');
   document.getElementById('add-chart').addEventListener('click', () => vscode.postMessage({ type: 'addChart' }));
+  document.getElementById('export-plots').addEventListener('click', () => vscode.postMessage({ type: 'exportPlots' }));
   arrangementSelect.addEventListener('change', () => vscode.postMessage({ type: 'setArrangement', arrangement: arrangementSelect.value }));
+  const historySelect = document.getElementById('history-seconds');
+  historySelect.addEventListener('change', () => vscode.postMessage({ type: 'setHistorySeconds', seconds: historySelect.value === 'custom' ? 'custom' : Number(historySelect.value) }));
 
   window.addEventListener('message', ({ data }) => {
-    if (data.type === 'snapshot') { charts = data.charts; arrangement = data.arrangement || 'grid'; setVariables(data.variables); session = data.state; refreshRate = data.refreshRate || 30; historySeconds = data.historySeconds || 30; rebuild(); updateHeader(); }
+    if (data.type === 'snapshot') { charts = data.charts; arrangement = data.arrangement || 'grid'; setVariables(data.variables); session = data.state; refreshRate = data.refreshRate || 30; setHistoryWindow(data.historySeconds); rebuild(); updateHeader(); }
+    if (data.type === 'historyWindow') { setHistoryWindow(data.historySeconds); }
+    if (data.type === 'renderExport') {
+      try { vscode.postMessage({ type: 'exportImage', requestId: data.requestId, dataUrl: exportPlots(data.chartIds) }); }
+      catch (error) { vscode.postMessage({ type: 'exportImage', requestId: data.requestId, error: String(error) }); }
+    }
     if (data.type === 'clearHistory') { clearHistory(); }
     if (data.type === 'layout') { charts = data.charts; arrangement = data.arrangement || arrangement; rebuild(); }
     if (data.type === 'catalog') { setVariables(data.variables); rebuild(); }
@@ -24,6 +32,21 @@
   window.addEventListener('resize', scheduleDraw);
 
   function setVariables(items) { variables = new Map((items || []).map(item => [item.id, item])); }
+  function setHistoryWindow(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 1 || seconds > 600) { return; }
+    historySeconds = seconds;
+    const preset = [5, 10, 30, 60, 120, 300, 600].includes(seconds);
+    historySelect.querySelector('option[value="custom"]').textContent = preset ? '自定义…' : `自定义：${seconds} 秒`;
+    historySelect.value = preset ? String(seconds) : 'custom';
+    for (const history of histories.values()) { trimHistory(history); }
+    cursorTime = undefined;
+    scheduleDraw();
+  }
+  function trimHistory(history) {
+    const cutoff = history.length ? history[history.length - 1].t - historySeconds : 0;
+    let first = 0; while (first < history.length && history[first].t < cutoff) { first++; }
+    if (first) { history.splice(0, first); }
+  }
   function clearHistory() { histories.clear(); cursorTime = undefined; scheduleDraw(); }
   function updateHeader() {
     if (!session) { connection.textContent = 'No session'; return; }
@@ -64,7 +87,7 @@
     for (let channel = 0; channel < width; channel += 1) {
       const id = batch.channelIds[channel]; const history = histories.get(id) || [];
       for (let sample = 0; sample < batch.sampleCount; sample += 1) { history.push({ t: (batch.startTimestampNs + sample * batch.samplePeriodNs) / 1e9, v: batch.values[sample * width + channel], epoch: batch.streamEpoch }); }
-      const cutoff = history.length ? history[history.length - 1].t - historySeconds : 0; let first = 0; while (first < history.length && history[first].t < cutoff) { first += 1; } if (first) { history.splice(0, first); }
+      trimHistory(history);
       histories.set(id, history);
     }
     const actual = batch.samplePeriodNs ? 1e9 / batch.samplePeriodNs : 0; metrics.textContent = `${actual.toFixed(1)} S/s · ${batch.channelIds.length} variables · dropped ${batch.droppedFrames}`;
@@ -78,7 +101,67 @@
     if (chart.mode !== 'fft') drawTime(ctx, chart, 36, 8, width - 44, timeHeight - 28, grid, text);
     if (chart.mode !== 'time') drawFft(ctx, chart, 36, fftTop + 8, width - 44, height - fftTop - 28, grid, text);
   }
-  function drawTime(ctx, chart, x, y, width, height, grid, text) {
+  function exportPlots(ids) {
+    const selected = charts.filter(chart => ids.includes(chart.id));
+    if (!selected.length) { throw new Error('没有选中图表。'); }
+    if (selected.some(chart => !chart.variableIds.some(id => histories.get(id)?.length))) { throw new Error('所选图表的数据已清空，请重新采样后导出。'); }
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const width = 900, margin = 28, scale = 2;
+    const style = getComputedStyle(document.body);
+    const background = style.getPropertyValue('--vscode-editor-background').trim() || '#1e1e1e';
+    const foreground = style.getPropertyValue('--vscode-editor-foreground').trim() || '#dddddd';
+    const grid = style.getPropertyValue('--vscode-editorWidget-border').trim() || '#555555';
+    const font = style.fontFamily || 'sans-serif';
+    ctx.font = `13px ${font}`;
+    const sections = selected.map(chart => {
+      const legend = chart.variableIds.flatMap((id, index) => wrapText(ctx, variables.get(id)?.expression || variables.get(id)?.name || id, width - margin * 2 - 22).map((text, line) => ({ text, color: colors[index % colors.length], first: line === 0 })));
+      ctx.font = `bold 18px ${font}`;
+      const titles = wrapText(ctx, chart.title, width - margin * 2 - 20);
+      ctx.font = `13px ${font}`;
+      const plotHeight = chart.mode === 'both' ? 480 : 280;
+      return { chart, legend, titles, plotHeight, height: titles.length * 24 + 28 + legend.length * 19 + plotHeight + 30 };
+    });
+    const height = 90 + sections.reduce((sum, section) => sum + section.height, 0);
+    if (height * scale > 16000 || width * height * scale * scale > 30_000_000) { throw new Error('合并图片尺寸过大，请减少图表或变量数量后重试。'); }
+    canvas.width = width * scale; canvas.height = height * scale; ctx.scale(scale, scale);
+    ctx.fillStyle = background; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = foreground; ctx.font = `bold 23px ${font}`; ctx.fillText('Cortex Kit · Plot', margin, 34);
+    ctx.font = `12px ${font}`; ctx.fillText(`Time window: ${historySeconds} s  |  ${new Date().toISOString()}`, margin, 58);
+    let top = 86;
+    const previousCursor = cursorTime; cursorTime = undefined;
+    try {
+      for (const section of sections) {
+        const { chart, legend, titles, plotHeight } = section;
+        ctx.fillStyle = foreground; ctx.font = `bold 18px ${font}`;
+        titles.forEach((title, index) => ctx.fillText(title, margin, top + 18 + index * 24));
+        let y = top + titles.length * 24;
+        ctx.font = `12px ${font}`;
+        ctx.fillText(`${chart.mode === 'both' ? 'Time + FFT' : chart.mode === 'fft' ? 'FFT' : 'Time'}  |  ${chart.mode === 'fft' ? 'Frequency axis: Hz' : 'Time axis relative to last sample'}`, margin, y + 17);
+        y += 28; ctx.font = `13px ${font}`;
+        for (const item of legend) {
+          if (item.first) { ctx.fillStyle = item.color; ctx.fillRect(margin, y + 3, 10, 10); }
+          ctx.fillStyle = foreground; ctx.fillText(item.text, margin + 20, y + 13); y += 19;
+        }
+        ctx.font = `11px ${font}`;
+        const timeHeight = chart.mode === 'both' ? plotHeight / 2 : plotHeight;
+        if (chart.mode !== 'fft') { drawTime(ctx, chart, margin + 70, y + 12, width - 2 * margin - 80, timeHeight - 40, grid, foreground, true); }
+        if (chart.mode !== 'time') { drawFft(ctx, chart, margin + 70, y + (chart.mode === 'both' ? timeHeight : 0) + 12, width - 2 * margin - 80, timeHeight - 40, grid, foreground); }
+        top += section.height;
+        ctx.strokeStyle = grid; ctx.beginPath(); ctx.moveTo(margin, top - 12); ctx.lineTo(width - margin, top - 12); ctx.stroke();
+      }
+    } finally { cursorTime = previousCursor; }
+    return canvas.toDataURL('image/png');
+  }
+  function wrapText(ctx, text, width) {
+    const lines = []; let line = '';
+    for (const character of String(text)) {
+      if (line && ctx.measureText(line + character).width > width) { lines.push(line); line = ''; }
+      line += character;
+    }
+    lines.push(line); return lines;
+  }
+  function drawTime(ctx, chart, x, y, width, height, grid, text, relative = false) {
     axes(ctx, x, y, width, height, grid); const newest = newestTime(chart.variableIds); const start = newest - historySeconds; let all = [];
     chart.variableIds.forEach(id => { all = all.concat((histories.get(id) || []).filter(point => point.t >= start && point.t <= newest && Number.isFinite(point.v)).map(point => point.v)); });
     if (!all.length) {
@@ -87,7 +170,7 @@
     }
     const [min, max] = extent(all);
     chart.variableIds.forEach((id, index) => drawEnvelope(ctx, histories.get(id) || [], start, newest, min, max, x, y, width, height, colors[index % colors.length]));
-    ctx.fillStyle = text; ctx.fillText(max.toPrecision(4), 2, y + 10); ctx.fillText(min.toPrecision(4), 2, y + height); ctx.fillText(`${historySeconds}s`, x, y + height + 16); ctx.fillText('now', x + width - 20, y + height + 16);
+    ctx.fillStyle = text; ctx.fillText(max.toPrecision(4), Math.max(2, x - 65), y + 10); ctx.fillText(min.toPrecision(4), Math.max(2, x - 65), y + height); ctx.fillText(`${relative ? '-' : ''}${historySeconds}s`, x, y + height + 16); ctx.fillText(relative ? '0 s' : 'now', x + width - 20, y + height + 16);
     if (cursorTime !== undefined && cursorTime >= start && cursorTime <= newest) { const cursorX = x + (cursorTime - start) / historySeconds * width; ctx.strokeStyle = text; ctx.beginPath(); ctx.moveTo(cursorX, y); ctx.lineTo(cursorX, y + height); ctx.stroke(); }
   }
   function drawEnvelope(ctx, points, start, end, min, max, x, y, width, height, color) {
@@ -107,7 +190,7 @@
     const spectra = chart.variableIds.map((id, colorIndex) => { const result = spectrum(histories.get(id) || []); return result ? { ...result, colorIndex } : undefined; }).filter(Boolean); spectra.forEach(result => result.values.forEach(value => peak = Math.max(peak, value)));
     if (!spectra.length) { ctx.fillStyle = text; ctx.textAlign = 'center'; ctx.fillText(waitingMessage(), x + width / 2, y + height / 2); ctx.textAlign = 'start'; return; }
     spectra.forEach(result => { ctx.strokeStyle = colors[result.colorIndex % colors.length]; ctx.beginPath(); result.values.forEach((value, bin) => { const xx = x + bin / Math.max(1, result.values.length - 1) * width; const yy = y + height - value / peak * height; if (!bin) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy); }); ctx.stroke(); });
-    const maxHz = spectra[0]?.maxHz || 0; ctx.fillStyle = text; ctx.fillText('FFT', 2, y + 10); ctx.fillText('0 Hz', x, y + height + 16); ctx.fillText(`${maxHz.toFixed(0)} Hz`, x + width - 42, y + height + 16);
+    const maxHz = spectra[0]?.maxHz || 0; ctx.fillStyle = text; ctx.fillText('FFT', Math.max(2, x - 65), y + 10); ctx.fillText('0 Hz', x, y + height + 16); ctx.fillText(`${maxHz.toFixed(0)} Hz`, x + width - 42, y + height + 16);
   }
   function spectrum(points) {
     const epoch = points.at(-1)?.epoch; const source = points.filter(point => point.epoch === epoch && Number.isFinite(point.v)).slice(-65536); let n = 1; while (n * 2 <= source.length && n < 65536) n *= 2; if (n < 16) return undefined; const selected = source.slice(-n); const input = selected.map(point => point.v); const output = fftMagnitudes(input); const period=(selected[selected.length-1].t-selected[0].t)/(n-1); return period > 0 ? { values: output, maxHz: 1/(2*period) } : undefined;

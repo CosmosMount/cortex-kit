@@ -27,6 +27,10 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private liveWatchTimer?: NodeJS.Timeout;
   private lastSubscriptionKey?: string;
   private recording?: { ids: string[]; rate: number };
+  private history: SampleBatch[] = [];
+  private historyValues = 0;
+  private exporting = false;
+  private exportRequest?: { id: string; timer: NodeJS.Timeout };
   private readonly samples = new vscode.EventEmitter<SampleBatch>();
   readonly onDidReceiveSamples = this.samples.event;
   private readonly sessionChanged = new vscode.EventEmitter<vscode.DebugSession | undefined>();
@@ -54,6 +58,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.catalog = restoreLayoutExpressions(this.layouts);
   }
   dispose(): void {
+    if (this.exportRequest) { clearTimeout(this.exportRequest.timer); }
     this.closeDataChannel(true);
     if (this.liveWatchTimer) { clearTimeout(this.liveWatchTimer); }
     this.liveWatchValues.dispose();
@@ -66,7 +71,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const changed = this.activeSession?.id !== session?.id;
     if (changed) { this.closeDataChannel(true); }
     this.activeSession = session;
-    if (changed) { this.clearHistory(); this.pendingLiveWatchValues.clear(); this.lastSubscriptionKey = undefined; }
+    if (changed) { if (session) { this.clearHistory(); } this.pendingLiveWatchValues.clear(); this.lastSubscriptionKey = undefined; }
     if (!session) {
       this.state = undefined;
       this.post({ type: 'session', state: undefined });
@@ -77,6 +82,12 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   setCatalog(catalog: VariableDescriptor[]): void { const expressions = this.catalog.filter(item => item.id.startsWith('expr:')); this.catalog = [...flattenVariables(catalog), ...expressions]; this.post({ type: 'catalog', variables: this.catalog }); void this.updateSubscriptions(); }
   setLiveWatchIds(ids: string[]): void { this.liveWatchIds = [...new Set(ids)]; void this.updateSubscriptions(); }
   refreshSubscriptions(): Promise<void> { this.lastSubscriptionKey = undefined; return this.updateSubscriptions(); }
+  private historySeconds(): number {
+    const folder = this.activeSession?.workspaceFolder ?? vscode.workspace.workspaceFolders?.[0];
+    const seconds = vscode.workspace.getConfiguration('cortexKit', folder?.uri).get<number>('historySeconds', 30);
+    return Number.isFinite(seconds) && seconds >= 1 && seconds <= 600 ? seconds : 30;
+  }
+  refreshSettings(): void { this.trimHistory(); this.post({ type: 'historyWindow', historySeconds: this.historySeconds() }); }
   setState(state: SessionState): void {
     if (state.lastError && state.lastError !== this.state?.lastError) { this.streamError.fire(state.lastError); }
     this.state = state; this.post({ type: 'session', state });
@@ -99,7 +110,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     socket.on('error', error => { this.streamError.fire(error.message); this.post({ type: 'streamError', message: error.message }); });
     socket.on('close', () => {
       if (generation !== this.socketGeneration || !this.activeSession || !this.dataChannel) { return; }
-      this.streamError.fire('采样通道断开，当前 CSV 记录已停止。');
+      this.streamError.fire('采样通道断开，正在重新连接。');
       this.reconnectTimer = setTimeout(() => this.openDataChannel(), 250);
     });
   }
@@ -115,13 +126,13 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const media = vscode.Uri.joinPath(this.context.extensionUri, 'media');
     view.webview.options = { enableScripts: true, localResourceRoots: [media] };
     view.webview.html = html(view.webview, media);
-    view.webview.onDidReceiveMessage(message => void this.handleMessage(message));
+    view.webview.onDidReceiveMessage(message => void this.handleMessage(message).catch(error => { void vscode.window.showErrorMessage(String(error)); }));
     view.onDidDispose(() => { this.view = undefined; });
     let wasVisible = view.visible;
     view.onDidChangeVisibility(() => {
       const reopened = view.visible && !wasVisible;
       wasVisible = view.visible;
-      if (reopened) { this.clearHistory(); }
+      if (reopened) { this.replayHistory(); }
     });
     if (this.dataChannel && !this.socket) { this.openDataChannel(); }
     this.pushSnapshot();
@@ -153,10 +164,13 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (this.state && (batch.sessionId !== this.state.sessionId || batch.programGeneration !== this.state.programGeneration || batch.streamEpoch !== this.state.streamEpoch)) { return; }
     this.samples.fire(batch);
     this.queueLiveWatchValues(latestLiveWatchValues(batch, this.liveWatchIds));
-    if (this.view?.visible && batch.channelIds.some(id => this.plotSubscriptionIds.has(id))) {
+    if (batch.channelIds.some(id => this.plotSubscriptionIds.has(id))) {
       const displayedIds = new Set(this.layouts.flatMap(chart => chart.variableIds));
       const plotted = selectBatchChannels(appendDerivedChannels(batch, this.layouts, this.catalog), displayedIds);
-      if (plotted.channelIds.length) { this.post({ type: 'samples', batch: plotted }); }
+      if (plotted.channelIds.length) {
+        this.history.push(plotted); this.historyValues += plotted.values.length; this.trimHistory();
+        if (this.view?.visible) { this.post({ type: 'samples', batch: plotted }); }
+      }
     }
   }
   private queueLiveWatchValues(values: LiveWatchValue[]): void {
@@ -172,7 +186,24 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
   private async handleMessage(message: Record<string, unknown>): Promise<void> {
     switch (message.type) {
-      case 'ready': this.pushSnapshot(); break;
+      case 'ready': this.pushSnapshot(); this.replayHistory(); break;
+      case 'exportPlots': await this.chooseExportPlots(); break;
+      case 'exportImage': await this.saveExportImage(message); break;
+      case 'setHistorySeconds': {
+        let seconds = message.seconds;
+        if (seconds === 'custom') {
+          const input = await vscode.window.showInputBox({ title: 'Plot 时间窗口', prompt: '显示并保留最近多少秒的数据（1–600 秒）', value: String(this.historySeconds()),
+            validateInput: value => value.trim() && Number.isFinite(Number(value)) && Number(value) >= 1 && Number(value) <= 600 ? undefined : '请输入 1–600 秒' });
+          if (input === undefined) { this.refreshSettings(); break; }
+          seconds = Number(input);
+        }
+        if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 1 || seconds > 600) { this.refreshSettings(); break; }
+        const folder = this.activeSession?.workspaceFolder ?? vscode.workspace.workspaceFolders?.[0];
+        try {
+          await vscode.workspace.getConfiguration('cortexKit', folder?.uri).update('historySeconds', seconds, folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Global);
+        } finally { this.refreshSettings(); }
+        break;
+      }
       case 'addVariables': await this.addVariables(String(message.chartId)); break;
       case 'addExpression': {
         const expression = await vscode.window.showInputBox({ prompt: 'Cortex Kit expression', placeHolder: 'signal.a * 2 + signal.b' });
@@ -217,13 +248,66 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     try { await this.activeSession.customRequest('cortexKit/setSubscriptions', subscription); }
     catch (error) { if (this.lastSubscriptionKey === key) { this.lastSubscriptionKey = undefined; } this.post({ type: 'streamError', message: `Subscription failed: ${String(error)}` }); if (throwOnError) { throw error; } }
   }
-  private pushSnapshot(): void { this.post({ type: 'snapshot', charts: this.layouts, arrangement: this.arrangement, variables: this.catalog, state: this.state, refreshRate: vscode.workspace.getConfiguration('cortexKit').get('chartRefreshRate', 30), historySeconds: vscode.workspace.getConfiguration('cortexKit').get('historySeconds', 30) }); void this.updateSubscriptions(); }
-  private clearHistory(): void { this.post({ type: 'clearHistory' }); }
+  private pushSnapshot(): void { this.post({ type: 'snapshot', charts: this.layouts, arrangement: this.arrangement, variables: this.catalog, state: this.state, refreshRate: vscode.workspace.getConfiguration('cortexKit').get('chartRefreshRate', 30), historySeconds: this.historySeconds() }); void this.updateSubscriptions(); }
+  private trimHistory(): void {
+    const last = this.history.at(-1);
+    if (!last) { return; }
+    const end = (batch: SampleBatch) => batch.startTimestampNs + Math.max(0, batch.sampleCount - 1) * batch.samplePeriodNs;
+    const cutoff = end(last) - this.historySeconds() * 1e9;
+    // Bound the extension-side replay cache as well as its time span.
+    while (this.history.length > 1 && (end(this.history[0]) < cutoff || this.historyValues > 8_000_000)) {
+      this.historyValues -= this.history.shift()!.values.length;
+    }
+  }
+  private replayHistory(): void {
+    this.post({ type: 'clearHistory' });
+    for (const batch of this.history) { this.post({ type: 'samples', batch }); }
+  }
+  private async chooseExportPlots(): Promise<void> {
+    if (this.exporting) { return; }
+    const available = this.layouts.filter(chart => this.history.some(batch => batch.channelIds.some(id => chart.variableIds.includes(id))));
+    if (!available.length) { void vscode.window.showInformationMessage('还没有可导出的 Plot 数据。采样后或暂停、结束会话后再导出。'); return; }
+    this.exporting = true;
+    const historyAtStart = this.history;
+    try {
+      const chosen = await vscode.window.showQuickPick(available.map(chart => ({ label: chart.title, description: `${chart.mode} · ${chart.variableIds.length} 个变量`, picked: true, chart })), {
+        title: '导出 Plot 图片', placeHolder: '选择一个或多个图表，按当前顺序合并为一张 PNG', canPickMany: true,
+      });
+      if (!chosen?.length) { return; }
+      if (historyAtStart !== this.history) { throw new Error('已切换目标会话，请重新选择要导出的图表。'); }
+      const selected = new Set(chosen.map(item => item.chart.id));
+      const id = nonce();
+      this.exportRequest = { id, timer: setTimeout(() => {
+        this.exportRequest = undefined; this.exporting = false;
+        void vscode.window.showErrorMessage('图片生成超时，请打开 Plot 面板后重试。');
+      }, 30000) };
+      this.post({ type: 'renderExport', requestId: id, chartIds: this.layouts.filter(chart => selected.has(chart.id)).map(chart => chart.id) });
+    } finally { if (!this.exportRequest) { this.exporting = false; } }
+  }
+  private async saveExportImage(message: Record<string, unknown>): Promise<void> {
+    if (!this.exportRequest || message.requestId !== this.exportRequest.id) { return; }
+    clearTimeout(this.exportRequest.timer); this.exportRequest = undefined;
+    try {
+      if (message.error) { throw new Error(String(message.error)); }
+      const data = message.dataUrl;
+      if (typeof data !== 'string' || data.length > 64 * 1024 * 1024 || !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(data)) { throw new Error('导出的 PNG 数据无效或超过 48 MB。请减少图表数量后重试。'); }
+      const bytes = Buffer.from(data.slice('data:image/png;base64,'.length), 'base64');
+      if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) { throw new Error('导出结果不是有效的 PNG 图片。'); }
+      const folder = this.activeSession?.workspaceFolder ?? vscode.workspace.workspaceFolders?.[0];
+      const filename = `plots-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+      const uri = await vscode.window.showSaveDialog({ title: '保存 Plot 合并图片', filters: { PNG: ['png'] },
+        ...(folder ? { defaultUri: vscode.Uri.joinPath(folder.uri, filename) } : {}) });
+      if (!uri) { return; }
+      await vscode.workspace.fs.writeFile(uri, bytes);
+      void vscode.window.showInformationMessage(`Plot 图片已保存：${uri.fsPath}`);
+    } finally { this.exporting = false; }
+  }
+  private clearHistory(): void { this.history = []; this.historyValues = 0; this.post({ type: 'clearHistory' }); }
   private post(message: unknown): void { void this.view?.webview.postMessage(message); }
 }
 
 function nonce(): string { const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; return Array.from({ length: 32 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join(''); }
 function html(webview: vscode.Webview, media: vscode.Uri): string {
   const script = webview.asWebviewUri(vscode.Uri.joinPath(media, 'main.js')); const style = webview.asWebviewUri(vscode.Uri.joinPath(media, 'styles.css')); const value = nonce();
-  return `<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${value}';"><link rel="stylesheet" href="${style}"></head><body><header><span id="connection">No session</span><span id="metrics"></span><select id="arrangement" title="Chart arrangement"><option value="grid">Auto grid</option><option value="row">Side by side</option><option value="column">Stacked</option></select><button id="add-chart" title="Add chart">＋ Add chart</button></header><main id="charts"></main><script nonce="${value}" src="${script}"></script></body></html>`;
+  return `<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${value}';"><link rel="stylesheet" href="${style}"></head><body><header><span id="connection">No session</span><span id="metrics"></span><label class="history-control">时间窗口 <select id="history-seconds" title="曲线显示与保留时长；加长后从现有数据继续积累"><option value="5">5 秒</option><option value="10">10 秒</option><option value="30" selected>30 秒</option><option value="60">1 分钟</option><option value="120">2 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="custom">自定义…</option></select></label><select id="arrangement" title="Chart arrangement"><option value="grid">Auto grid</option><option value="row">Side by side</option><option value="column">Stacked</option></select><button id="export-plots" title="选择一个或多个图表合并保存为 PNG">导出图片</button><button id="add-chart" title="Add chart">＋ Add chart</button></header><main id="charts"></main><script nonce="${value}" src="${script}"></script></body></html>`;
 }

@@ -165,7 +165,7 @@
         "cortexKit.chartRefreshRate": { "type": "number", "default": 30, "minimum": 1, "maximum": 60 },
         "cortexKit.liveWatchSamplesPerSecond": { "type": "number", "default": 20, "minimum": 1, "maximum": 1000, "description": "Requested sample rate for Live Watch-only variables, independent of Plot sampling; shared variables use Plot samples" },
         "cortexKit.liveWatchRefreshRate": { "type": "number", "default": 10, "minimum": 1, "maximum": 30, "description": "Maximum Live Watch tree refresh rate in frames per second" },
-        "cortexKit.historySeconds": { "type": "number", "default": 30, "minimum": 1, "maximum": 600 }
+        "cortexKit.historySeconds": { "type": "number", "scope": "resource", "default": 30, "minimum": 1, "maximum": 600, "description": "Plot rolling time window and chart retention in seconds. Also selectable in the Plot header; does not change sampling rate or CSV recording duration." }
       }
     }
   }

@@ -439,6 +439,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     svdWatcher.onDidDelete(scheduleSvdRefresh),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration('launch') || event.affectsConfiguration('cortexKit.backendPath')) { scheduleOfflineRefresh(); scheduleSvdRefresh(); }
+      if (event.affectsConfiguration('cortexKit.historySeconds')) { plots.refreshSettings(); }
       if (event.affectsConfiguration('cortexKit.liveWatchSamplesPerSecond')) { void plots.refreshSubscriptions(); }
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => { scheduleOfflineRefresh(); scheduleSvdRefresh(); }),
