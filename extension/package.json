@@ -65,9 +65,9 @@
           "probe": {
             "type": "object",
             "properties": {
-              "selector": { "type": "string", "default": "auto", "description": "Probe selector reported by Cortex Kit, or auto" },
+              "selector": { "type": "string", "default": "auto", "description": "Exact selector from Configure Project for ST-Link or CMSIS-DAP / DAPLink. auto opens the first detected probe; select explicitly when multiple probes are connected." },
               "protocol": { "type": "string", "enum": ["swd", "jtag"], "default": "swd" },
-              "speedKHz": { "type": "integer", "minimum": 1, "default": 10000, "description": "Debug clock in kHz" },
+              "speedKHz": { "type": "integer", "minimum": 1, "maximum": 4294967, "default": 10000, "description": "Debug clock in kHz. Requested clock, not sampling rate. Increase for throughput; reduce on connection errors. CMSIS-DAP cannot report the actual clock." },
               "connectUnderReset": { "type": "boolean", "default": false, "description": "Assert the hardware reset pin while attaching; use when a running target prevents a normal debug connection" }
             }
           }, "flashing": { "type": "object" }, "acquisition": { "type": "object" }, "svdFile": { "type": ["string", "null"] }
@@ -75,9 +75,9 @@
         "attach": { "required": ["chip"], "properties": { "chip": { "type": "string" }, "probe": {
           "type": "object",
           "properties": {
-            "selector": { "type": "string", "default": "auto", "description": "Probe selector reported by Cortex Kit, or auto" },
+            "selector": { "type": "string", "default": "auto", "description": "Exact selector from Configure Project for ST-Link or CMSIS-DAP / DAPLink. auto opens the first detected probe; select explicitly when multiple probes are connected." },
             "protocol": { "type": "string", "enum": ["swd", "jtag"], "default": "swd" },
-            "speedKHz": { "type": "integer", "minimum": 1, "default": 10000, "description": "Debug clock in kHz" },
+            "speedKHz": { "type": "integer", "minimum": 1, "maximum": 4294967, "default": 10000, "description": "Debug clock in kHz. Requested clock, not sampling rate. Increase for throughput; reduce on connection errors. CMSIS-DAP cannot report the actual clock." },
             "connectUnderReset": { "type": "boolean", "default": false, "description": "Assert the hardware reset pin while attaching; use when a running target prevents a normal debug connection" }
           }
         }, "programBinary": { "type": "string" }, "plotOnly": { "type": "boolean", "default": false, "description": "Protected live plotting mode: allow pause/continue and typed Live Watch writes, but do not reset, flash, perform arbitrary memory writes, or install breakpoints" }, "svdFile": { "type": ["string", "null"] } } }
@@ -111,6 +111,8 @@
       ]
     },
     "commands": [
+      { "command": "cortexKit.selectProbeAndConnect", "title": "Cortex Kit: Select ST-Link / DAPLink and Connect", "icon": "$(plug)" },
+      { "command": "cortexKit.configureProbe", "title": "Cortex Kit: Configure Probe / Sampling" },
       { "command": "cortexKit.configureProject", "title": "Cortex Kit: Configure Project" },
       { "command": "cortexKit.importCortexDebug", "title": "Cortex Kit: Import Cortex-Debug Configuration" },
       { "command": "cortexKit.mockDebug", "title": "Cortex Kit: Mock Debug" },
@@ -136,6 +138,7 @@
     ],
     "menus": {
       "view/title": [
+        { "command": "cortexKit.selectProbeAndConnect", "when": "view == cortexKit.session || view == cortexKit.liveWatch", "group": "navigation@0" },
         { "command": "cortexKit.addLiveWatch", "when": "view == cortexKit.liveWatch", "group": "navigation@1" },
         { "command": "cortexKit.refreshLiveWatch", "when": "view == cortexKit.liveWatch", "group": "navigation@2" },
         { "command": "cortexKit.clearLiveWatch", "when": "view == cortexKit.liveWatch", "group": "navigation@3" },

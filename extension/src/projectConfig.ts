@@ -6,11 +6,121 @@ import { convertCortexDebugConfiguration, suggestedProbeRsChip } from './launchC
 
 const run = promisify(execFile);
 
+async function selectBoundProbe(backendPath: string) {
+  const family = await vscode.window.showQuickPick([
+    { label: 'ST-Link', key: 'stlink' },
+    { label: 'DAPLink / CMSIS-DAP', key: 'cmsisdap' },
+  ], { title: 'Cortex Kit: Probe Type', placeHolder: 'Choose the type of probe to detect and bind' });
+  if (!family) { return; }
+  while (true) {
+    let probes: Awaited<ReturnType<typeof scanProbes>>;
+    try { probes = await scanProbes(backendPath); }
+    catch (error) {
+      const action = await vscode.window.showErrorMessage(`Probe detection failed: ${String(error)}`, 'Retry');
+      if (action === 'Retry') { continue; }
+      return;
+    }
+    const matches = probes.filter(probe => probe.probeType.toLowerCase().replace(/[^a-z]/g, '').includes(family.key));
+    if (!matches.length) {
+      const action = await vscode.window.showWarningMessage(`No ${family.label} detected. Connect the probe and retry.${probes.length ? ` Detected: ${probes.map(probe => probe.identifier).join(', ')}.` : ''}`, 'Retry');
+      if (action === 'Retry') { continue; }
+      return;
+    }
+    const selected = matches.length === 1 ? matches[0] : (await vscode.window.showQuickPick(matches.map(probe => ({
+      label: probe.identifier, description: probe.serialNumber ?? 'no serial', detail: probe.selector, probe,
+    })), { title: `Cortex Kit: Select ${family.label}`, placeHolder: 'Multiple probes detected: select the serial number to bind', matchOnDetail: true }))?.probe;
+    if (!selected) { return; }
+    if (matches.filter(probe => probe.selector === selected.selector).length > 1) {
+      void vscode.window.showErrorMessage('These probes have identical selectors. Disconnect the other identical probes and run setup again.');
+      return;
+    }
+    return selected;
+  }
+}
+
+async function selectProbeSettings(backendPath: string) {
+  const probe = await selectBoundProbe(backendPath);
+  if (!probe) { return; }
+  const protocol = await vscode.window.showQuickPick([
+    { label: 'SWD', description: 'Typical Cortex-M connection, including DAPLink', value: 'swd' },
+    { label: 'JTAG', description: 'Requires support in both probe and target', value: 'jtag' },
+  ], { title: 'Cortex Kit: Debug Protocol' });
+  if (!protocol) { return; }
+  const speed = await vscode.window.showInputBox({
+    title: 'Cortex Kit: Debug Clock', prompt: 'Requested clock in kHz (10000 = 10 MHz). Increase for throughput; reduce if connection fails. CMSIS-DAP cannot report its actual clock.', value: '10000',
+    validateInput: value => /^\d+$/.test(value.trim()) && Number(value) >= 1 && Number(value) <= 4294967 ? undefined : 'Enter an integer from 1 to 4294967 kHz',
+  });
+  if (speed === undefined) { return; }
+  const connection = await vscode.window.showQuickPick([
+    { label: 'Normal connection', description: 'Do not assert reset while connecting', value: false },
+    { label: 'Connect under reset', description: 'Requires wired NRST; resets the target while connecting', value: true },
+  ], { title: 'Cortex Kit: Connection Mode' });
+  if (!connection) { return; }
+  const rate = await vscode.window.showQuickPick([
+    { label: 'Maximum throughput', description: 'Request 100000 S/s; actual rate depends on probe and selected variables', value: 100000 },
+    { label: '5000 S/s', description: 'Lower requested acquisition rate', value: 5000 },
+    { label: '1000 S/s', description: 'Lower requested acquisition rate', value: 1000 },
+  ], { title: 'Cortex Kit: Sampling Rate' });
+  if (!rate) { return; }
+  return { probe: { selector: probe.selector, protocol: protocol.value, speedKHz: Number(speed), connectUnderReset: connection.value }, requestedSamplesPerSecond: rate.value };
+}
+
+export async function selectProbeAndConnect(backendPath: string): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) { void vscode.window.showErrorMessage('Open a firmware workspace first.'); return; }
+  if (vscode.debug.activeDebugSession?.type === 'cortex-kit') {
+    void vscode.window.showWarningMessage('Stop the current Cortex Kit session before switching probes.'); return;
+  }
+  const launch = vscode.workspace.getConfiguration('launch', folder.uri);
+  const configurations = launch.get<vscode.DebugConfiguration[]>('configurations', []);
+  const choices = configurations.filter(item => item.type === 'cortex-kit' && !item.mockProbe);
+  if (!choices.length) { void vscode.window.showErrorMessage('Run Cortex Kit: Configure Project to set up the chip and firmware first.'); return; }
+  const probe = await selectBoundProbe(backendPath);
+  if (!probe) { return; }
+  const selected = choices.length === 1 ? choices[0] : (await vscode.window.showQuickPick(choices.map(configuration => ({
+    label: configuration.name, description: configuration.chip, detail: 'Bind this configuration and connect in Live Plot attach mode', configuration,
+  })), { title: `Connect ${probe.identifier} (${probe.serialNumber ?? 'no serial'})` }))?.configuration;
+  if (!selected) { return; }
+  const updated = { ...selected, probe: { ...selected.probe, selector: probe.selector } };
+  await launch.update('configurations', configurations.map(item => item === selected ? updated : item), vscode.ConfigurationTarget.WorkspaceFolder);
+  const connection: vscode.DebugConfiguration = {
+    ...updated, request: 'attach', plotOnly: true, stopOnEntry: false,
+    probe: { ...updated.probe, connectUnderReset: false },
+    flashing: { enabled: false, verify: false, resetAfter: false },
+  };
+  delete connection.preLaunchTask;
+  delete connection.postDebugTask;
+  try {
+    if (!await vscode.debug.startDebugging(folder, connection)) {
+      void vscode.window.showErrorMessage(`Bound ${probe.identifier} (${probe.serialNumber ?? 'no serial'}), but the session did not start. Check the Debug Console for connection details.`);
+    }
+  } catch (error) {
+    void vscode.window.showErrorMessage(`Bound ${probe.identifier}, but connection failed: ${String(error)}`);
+  }
+}
+
+export async function configureProbe(backendPath: string): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) { void vscode.window.showErrorMessage('Open a firmware workspace first.'); return; }
+  const launch = vscode.workspace.getConfiguration('launch', folder.uri);
+  const configurations = launch.get<vscode.DebugConfiguration[]>('configurations', []);
+  const choices = configurations.filter(item => item.type === 'cortex-kit' && !item.mockProbe);
+  if (!choices.length) { await configureProject(backendPath); return; }
+  const selected = await vscode.window.showQuickPick(choices.map(configuration => ({ label: configuration.name, configuration })), { title: 'Cortex Kit: Configure Probe / Sampling', placeHolder: 'Select the configuration to update' });
+  if (!selected) { return; }
+  const settings = await selectProbeSettings(backendPath);
+  if (!settings) { return; }
+  await launch.update('configurations', configurations.map(item => item === selected.configuration ? {
+    ...item, probe: { ...item.probe, ...settings.probe }, acquisition: { ...item.acquisition, requestedSamplesPerSecond: settings.requestedSamplesPerSecond },
+  } : item), vscode.ConfigurationTarget.WorkspaceFolder);
+  void vscode.window.showInformationMessage(`Updated ${selected.label}: ${settings.probe.selector}, ${settings.probe.speedKHz} kHz, requested ${settings.requestedSamplesPerSecond} S/s. Start a new session to apply.`);
+}
+
 export async function configureProject(backendPath: string): Promise<void> {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) { void vscode.window.showErrorMessage('Open a firmware workspace before configuring Cortex Kit.'); return; }
-  const probes = await scanProbes(backendPath);
-  const probe = probes.length ? await vscode.window.showQuickPick(probes.map(item => ({ label: item.identifier, description: item.serialNumber ?? 'no serial', detail: item.probeType, selector: item.selector })), { placeHolder: 'Select ST-Link or CMSIS-DAP probe' }) : undefined;
+  const settings = await selectProbeSettings(backendPath);
+  if (!settings) { return; }
   const targets = await scanTargets(backendPath);
   const chip = targets.length
     ? await vscode.window.showQuickPick(targets, { placeHolder: 'Search the probe-rs target registry (for STM32H723VGT6, search STM32H723VG)', matchOnDescription: true })
@@ -29,9 +139,9 @@ export async function configureProject(backendPath: string): Promise<void> {
     type: 'cortex-kit', request: 'launch', name: 'Cortex Kit: Flash & Debug', cwd: '${workspaceFolder}', chip: chip.trim(),
     ...(selectedBinary?.uri ? { programBinary: relative(selectedBinary.uri) } : {}),
     ...(selectedTask?.task ? { preLaunchTask: selectedTask.task.name } : {}),
-    probe: { selector: probe?.selector ?? 'auto', protocol: 'swd', speedKHz: 10000, connectUnderReset: false },
+    probe: settings.probe,
     flashing: { enabled: Boolean(selectedBinary?.uri), verify: true, resetAfter: true },
-    acquisition: { requestedSamplesPerSecond: 5000, maxBurstMs: 2, historySeconds: 30 },
+    acquisition: { requestedSamplesPerSecond: settings.requestedSamplesPerSecond, maxBurstMs: 2, historySeconds: 30 },
     svdFile: relative(selectedSvd?.uri) ?? null,
   };
   const liveConfiguration: Record<string, unknown> = {
@@ -41,7 +151,7 @@ export async function configureProject(backendPath: string): Promise<void> {
     plotOnly: true,
     stopOnEntry: false,
     flashing: { enabled: false, verify: false, resetAfter: false },
-    acquisition: { requestedSamplesPerSecond: 1000, maxBurstMs: 2, historySeconds: 30 },
+    acquisition: configuration.acquisition,
   };
   delete liveConfiguration.preLaunchTask;
   const launch = vscode.workspace.getConfiguration('launch', folder.uri);
@@ -87,7 +197,8 @@ export async function importCortexDebugConfiguration(backendPath: string): Promi
 }
 
 export async function scanProbes(backendPath: string): Promise<Array<{ selector: string; identifier: string; serialNumber?: string; probeType: string }>> {
-  try { const { stdout } = await run(backendPath, ['--list-probes'], { windowsHide: true }); return JSON.parse(stdout); } catch { return []; }
+  const { stdout } = await run(backendPath, ['--list-probes'], { windowsHide: true, timeout: 10000 });
+  return JSON.parse(stdout);
 }
 export async function scanTargets(backendPath: string): Promise<string[]> { try { const { stdout } = await run(backendPath, ['--list-targets'], { windowsHide: true, maxBuffer: 4 * 1024 * 1024 }); return JSON.parse(stdout); } catch { return []; } }
 async function scanExecutable(name: string): Promise<string | undefined> { try { const command = process.platform === 'win32' ? 'where.exe' : 'which'; const { stdout } = await run(command, [name], { windowsHide: true }); return stdout.split(/\r?\n/).find(Boolean); } catch { return undefined; } }

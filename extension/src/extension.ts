@@ -9,7 +9,7 @@ import { expandVariableSelections, isPlottableVariable, isVariableSelection, plo
 import { PlotViewProvider } from './plots';
 import { SampleRecorder } from './recorder';
 import { ThreadsView } from './threads';
-import { configureProject, defaultBackendPath, expandWorkspace, importCortexDebugConfiguration } from './projectConfig';
+import { selectProbeAndConnect, configureProbe, configureProject, defaultBackendPath, expandWorkspace, importCortexDebugConfiguration } from './projectConfig';
 import { inspectSvd } from './svdCatalog';
 import { SessionState, SvdTree, VariableDescriptor } from './types';
 import { LiveWatchNode, LiveWatchProvider, PeripheralNode, PeripheralsProvider, RegisterNode, SessionProvider, VariableNode, VariablesProvider } from './views';
@@ -159,6 +159,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   const register = (command: string, callback: (...args: any[]) => unknown) => context.subscriptions.push(vscode.commands.registerCommand(command, callback));
+  register('cortexKit.selectProbeAndConnect', () => selectProbeAndConnect(defaultBackendPath(context)));
+  register('cortexKit.configureProbe', () => configureProbe(defaultBackendPath(context)));
   register('cortexKit.configureProject', async () => {
     await configureProject(defaultBackendPath(context));
     offlineIndex.schedule(0);
