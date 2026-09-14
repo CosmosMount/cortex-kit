@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     path::Path,
     time::Duration,
 };
@@ -286,8 +286,29 @@ impl Backend for ProbeRsBackend {
         Ok(())
     }
     fn sample(&mut self, watches: &[WatchSpec], frames: usize) -> Result<Vec<f64>, String> {
+        let mut core = self.core()?;
+        let mut pointer_values = HashMap::new();
+        for address in watches.iter().filter_map(|watch| watch.pointer_address) {
+            if pointer_values.contains_key(&address) { continue; }
+            let mut bytes = [0_u8; 4];
+            core.read(address, &mut bytes).map_err(|error| error.to_string())?;
+            let value = u64::from(u32::from_le_bytes(bytes));
+            pointer_values.insert(address, (value != 0).then_some(value));
+        }
+        let mut unavailable = HashSet::new();
+        let watches = watches.iter().cloned().map(|mut watch| {
+            if let Some(pointer_address) = watch.pointer_address {
+                if let Some(base) = pointer_values[&pointer_address] {
+                    watch.address = base.saturating_add(watch.pointer_offset);
+                } else {
+                    unavailable.insert(watch.id.clone());
+                }
+            }
+            watch
+        }).collect::<Vec<_>>();
         let requests = watches
             .iter()
+            .filter(|watch| !unavailable.contains(&watch.id))
             .map(|watch| ReadRequest {
                 variable_id: watch.id.clone(),
                 address: watch.address,
@@ -306,10 +327,9 @@ impl Backend for ProbeRsBackend {
             .map(|watch| (watch.id.as_str(), watch.scalar_kind))
             .collect::<HashMap<_, _>>();
         let mut scratch = vec![0_u8; blocks.iter().map(|block| block.byte_len).max().unwrap_or(0)];
-        let mut core = self.core()?;
         let mut output = Vec::with_capacity(watches.len() * frames);
         for _ in 0..frames {
-            let mut frame = vec![0.0; watches.len()];
+            let mut frame = vec![f64::NAN; watches.len()];
             for block in &blocks {
                 core.read(block.address, &mut scratch[..block.byte_len])
                     .map_err(|error| error.to_string())?;

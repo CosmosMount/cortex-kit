@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { BatchDecoder } from './binaryProtocol';
 import { expressionDependencies } from './expression';
 import { latestLiveWatchValues, splitSubscriptions, selectBatchChannels } from './liveWatchModel';
-import { appendDerivedChannels, expandVariableSelections, expressionDescriptor, flattenVariables, isVariableSelection, plottableLeaves, reorderCharts, resolveSubscriptionIds, restoreLayoutExpressions } from './plotModel';
+import { appendDerivedChannels, expandVariableSelections, expressionDescriptor, flattenVariables, isPlottableVariable, reorderCharts, resolveSubscriptionIds, restoreLayoutExpressions } from './plotModel';
 import { ChartArrangement, ChartLayout, LiveWatchValue, SampleBatch, SessionState, VariableDescriptor } from './types';
 
 interface DataChannelInfo { port: number; token: string; protocolVersion: number; }
@@ -141,21 +141,34 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   async addVariables(chartId?: string, initial?: VariableDescriptor | VariableDescriptor[]): Promise<void> {
     const chart = this.layouts.find(item => item.id === chartId) ?? this.layouts[0];
     if (!chart) { await this.addChart(); return this.addVariables(undefined, initial); }
-    let selections: VariableDescriptor[] = initial ? expandVariableSelections(Array.isArray(initial) ? initial : [initial]) : [];
-    if (!initial) {
-      const items = this.catalog.filter(isVariableSelection).map(variable => {
-        const leaves = plottableLeaves(variable);
-        const container = variable.children.length > 0;
+    let selections: VariableDescriptor[] = [];
+    if (initial) {
+      const requested = Array.isArray(initial) ? initial : [initial];
+      const leaves = expandVariableSelections(requested);
+      if (requested.some(variable => variable.children.length > 0)) {
+        const chosen = await vscode.window.showQuickPick(leaves.map(variable => ({
+          label: `$(symbol-variable) ${variable.expression}`,
+          description: `${variable.typeName} · ${variableLocation(variable)}`,
+          picked: chart.variableIds.includes(variable.id),
+          variable,
+        })), { canPickMany: true, matchOnDescription: true, placeHolder: `选择要加入 ${chart.title} 的内部变量` });
+        if (!chosen) { return; }
+        selections = chosen.map(item => item.variable);
+      } else {
+        selections = leaves;
+      }
+    } else {
+      const items = this.catalog.filter(isPlottableVariable).map(variable => {
         return {
-          label: `${container ? '$(symbol-struct)' : '$(symbol-variable)'} ${variable.expression}`,
-          description: container ? `${variable.typeName} · ${leaves.length} scalar fields` : `${variable.typeName}${variable.address === undefined ? ' · expression' : ` · 0x${variable.address.toString(16)}`}`,
-          picked: leaves.every(leaf => chart.variableIds.includes(leaf.id)),
+          label: `$(symbol-variable) ${variable.expression}`,
+          description: `${variable.typeName} · ${variableLocation(variable)}`,
+          picked: chart.variableIds.includes(variable.id),
           variable,
         };
       });
-      const chosen = await vscode.window.showQuickPick(items, { canPickMany: true, matchOnDescription: true, matchOnDetail: true, placeHolder: `Select a structure or individual fields for ${chart.title}` });
+      const chosen = await vscode.window.showQuickPick(items, { canPickMany: true, matchOnDescription: true, matchOnDetail: true, placeHolder: `选择要加入 ${chart.title} 的标量变量` });
       if (!chosen) { return; }
-      selections = expandVariableSelections(chosen.map(item => item.variable));
+      selections = chosen.map(item => item.variable);
     }
     chart.variableIds = [...new Set([...chart.variableIds, ...selections.map(item => item.id)])];
     await this.saveLayouts();
@@ -307,6 +320,14 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 }
 
 function nonce(): string { const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; return Array.from({ length: 32 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join(''); }
+function variableLocation(variable: VariableDescriptor): string {
+  if (variable.address !== undefined) { return `0x${variable.address.toString(16)}`; }
+  if (variable.pointerAddress !== undefined) {
+    const offset = variable.pointerOffset ?? 0;
+    return `*(0x${variable.pointerAddress.toString(16)})${offset ? ` + 0x${offset.toString(16)}` : ''}`;
+  }
+  return 'expression';
+}
 function html(webview: vscode.Webview, media: vscode.Uri): string {
   const script = webview.asWebviewUri(vscode.Uri.joinPath(media, 'main.js')); const style = webview.asWebviewUri(vscode.Uri.joinPath(media, 'styles.css')); const value = nonce();
   return `<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${value}';"><link rel="stylesheet" href="${style}"></head><body><header><span id="connection">No session</span><span id="metrics"></span><label class="history-control">时间窗口 <select id="history-seconds" title="曲线显示与保留时长；加长后从现有数据继续积累"><option value="5">5 秒</option><option value="10">10 秒</option><option value="30" selected>30 秒</option><option value="60">1 分钟</option><option value="120">2 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="custom">自定义…</option></select></label><select id="arrangement" title="Chart arrangement"><option value="grid">Auto grid</option><option value="row">Side by side</option><option value="column">Stacked</option></select><button id="export-plots" title="选择一个或多个图表合并保存为 PNG">导出图片</button><button id="add-chart" title="Add chart">＋ Add chart</button></header><main id="charts"></main><script nonce="${value}" src="${script}"></script></body></html>`;

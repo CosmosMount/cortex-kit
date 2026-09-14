@@ -7,7 +7,7 @@ export function flattenVariables(values: VariableDescriptor[]): VariableDescript
 
 export function isPlottableVariable(value: VariableDescriptor): boolean {
   return value.id.startsWith('expr:') || (
-    value.address !== undefined
+    (value.address !== undefined || value.pointerAddress !== undefined)
     && value.children.length === 0
     && [1, 2, 4, 8].includes(value.byteWidth)
   );

@@ -2,7 +2,7 @@
   "name": "cortex-kit",
   "displayName": "Cortex Kit",
   "description": "Native Cortex-M debugging, peripheral inspection, plotting and FFT through probe-rs.",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "publisher": "CosmosMount",
   "license": "MIT",
   "repository": {

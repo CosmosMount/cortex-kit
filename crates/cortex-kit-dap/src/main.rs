@@ -354,21 +354,30 @@ fn handle_request(
                 _ => Err("unexpected register reply".into()),
             }
         }
-        "variables" if arguments.get("variablesReference").and_then(Value::as_i64) == Some(2) => {
-            static_variables_response(worker, &catalog.lock().unwrap())
+        "variables" if arguments.get("variablesReference").and_then(Value::as_i64)
+            .is_some_and(|reference| reference == 2 || reference >= 4) => {
+            static_variables_response(worker, &catalog.lock().unwrap(), arguments)
         }
         "variables" => variables_response(&catalog.lock().unwrap(), arguments),
         "evaluate" => evaluate(worker, &catalog.lock().unwrap(), arguments),
         "setVariable" => {
             require_debug_control(*plot_only, "variable write")?;
+            let catalog = catalog.lock().unwrap();
+            let name = arguments.get("name").and_then(Value::as_str).unwrap_or_default();
+            let reference = arguments.get("variablesReference").and_then(Value::as_u64).unwrap_or(2);
+            let mut containers = Vec::new();
+            collect_variable_containers(&catalog, &mut containers);
+            let children = if reference == 2 { catalog.as_slice() } else {
+                &containers.get(reference.checked_sub(4).ok_or("invalid variable reference")? as usize)
+                    .ok_or("unknown variable reference")?.children
+            };
+            let variable = children.iter().find(|item| item.name == name || item.expression == name)
+                .ok_or_else(|| format!("unknown child variable: {name}"))?;
             set_named_value_with_auto_pause(
                 worker,
                 state,
-                &catalog.lock().unwrap(),
-                arguments
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
+                &catalog,
+                &variable.id,
                 arguments
                     .get("value")
                     .and_then(Value::as_str)
@@ -571,6 +580,8 @@ fn handle_request(
                     Some(WatchSpec {
                         id,
                         address,
+                        pointer_address: None,
+                        pointer_offset: 0,
                         byte_width: size_bits.div_ceil(8).clamp(1, 8) as u8,
                         scalar_kind: ScalarKind::Unsigned,
                     })
@@ -598,14 +609,8 @@ fn handle_request(
                     .flatten()
                     .filter_map(Value::as_str)
                     .filter_map(|id| find_variable(&descriptors, id))
-                    .filter_map(|item| {
-                        item.address.map(|address| WatchSpec {
-                            id: item.id.clone(),
-                            address,
-                            byte_width: item.byte_width,
-                            scalar_kind: item.scalar_kind,
-                        })
-                    })
+                    .filter(|item| is_addressable(item))
+                    .map(watch_for)
                     .collect()
             };
             let watches = resolve_watches("ids");
@@ -769,14 +774,8 @@ fn read_descriptor_values(
 ) -> Result<Value, String> {
     let watches = descriptors
         .iter()
-        .filter_map(|item| {
-            item.address.map(|address| WatchSpec {
-                id: item.id.clone(),
-                address,
-                byte_width: item.byte_width,
-                scalar_kind: item.scalar_kind,
-            })
-        })
+        .filter(|item| is_addressable(item))
+        .map(watch_for)
         .collect::<Vec<_>>();
     let values = match worker.call(WorkerCommand::ReadValues(watches.clone()))? {
         WorkerReply::Values(values) => values,
@@ -826,27 +825,51 @@ fn variables_response(catalog: &[VariableDescriptor], arguments: &Value) -> Resu
 fn static_variables_response(
     worker: &WorkerHandle,
     catalog: &[VariableDescriptor],
+    arguments: &Value,
 ) -> Result<Value, String> {
-    let mut descriptors = Vec::new();
-    collect_scalar_variables(catalog, &mut descriptors);
+    let mut containers = Vec::new();
+    collect_variable_containers(catalog, &mut containers);
+    let reference = arguments.get("variablesReference").and_then(Value::as_u64).unwrap_or(2);
+    let children = if reference == 2 { catalog } else {
+        &containers.get(reference.saturating_sub(4) as usize)
+            .ok_or_else(|| format!("unknown variable reference: {reference}"))?.children
+    };
+    let descriptors = children.iter().filter(|item| {
+        match arguments.get("filter").and_then(Value::as_str) {
+            Some("indexed") => item.name.starts_with('['),
+            Some("named") => !item.name.starts_with('['),
+            _ => true,
+        }
+    }).skip(arguments.get("start").and_then(Value::as_u64).unwrap_or(0) as usize)
+        .take(arguments.get("count").and_then(Value::as_u64).filter(|count| *count > 0)
+            .unwrap_or(usize::MAX as u64) as usize).collect::<Vec<_>>();
     let watches = descriptors
         .iter()
+        .filter(|item| item.children.is_empty() && is_addressable(item) && matches!(item.byte_width, 1 | 2 | 4 | 8))
         .map(|item| watch_for(item))
         .collect::<Vec<_>>();
-    let values = match worker.call(WorkerCommand::ReadValues(watches))? {
+    let values = if watches.is_empty() { Vec::new() } else { match worker.call(WorkerCommand::ReadValues(watches))? {
         WorkerReply::Values(values) => values,
         _ => return Err("unexpected static value reply".into()),
-    };
-    Ok(
-        json!({"variables":descriptors.into_iter().zip(values).map(|(item, value)| json!({
-        "name":item.expression,
-        "evaluateName":item.expression,
-        "value":format_scalar(value, item.scalar_kind),
-        "type":item.type_name,
-        "variablesReference":0,
-        "memoryReference":item.address.map(|address| format!("0x{address:x}")),
-    })).collect::<Vec<_>>() }),
-    )
+    }};
+    let references = containers.iter().enumerate().map(|(index, item)| (item.id.as_str(), index + 4)).collect::<HashMap<_, _>>();
+    let mut values = values.into_iter();
+    Ok(json!({"variables":descriptors.into_iter().map(|item| {
+        let value = if !item.children.is_empty() { format!("{} {{…}}", item.type_name) }
+            else if is_addressable(item) && matches!(item.byte_width, 1 | 2 | 4 | 8) {
+                values.next().map(|value| format_scalar(value, item.scalar_kind)).unwrap_or_else(|| "<unavailable>".into())
+            } else { "<unavailable>".into() };
+        json!({
+            "name":item.name,
+            "evaluateName":item.expression,
+            "value":value,
+            "type":item.type_name,
+            "variablesReference":references.get(item.id.as_str()).copied().unwrap_or(0),
+            "namedVariables":item.children.iter().filter(|child| !child.name.starts_with('[')).count(),
+            "indexedVariables":item.children.iter().filter(|child| child.name.starts_with('[')).count(),
+            "memoryReference":item.address.map(|address| format!("0x{address:x}")),
+        })
+    }).collect::<Vec<_>>() }))
 }
 
 fn evaluate(
@@ -858,6 +881,18 @@ fn evaluate(
         .get("expression")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if let Some(item) = find_variable(catalog, source).filter(|item| !item.children.is_empty()) {
+        let mut containers = Vec::new();
+        collect_variable_containers(catalog, &mut containers);
+        let reference = containers.iter().position(|container| container.id == item.id).unwrap() + 4;
+        return Ok(json!({
+            "result":format!("{} {{…}}", item.type_name), "type":item.type_name,
+            "variablesReference":reference,
+            "namedVariables":item.children.iter().filter(|child| !child.name.starts_with('[')).count(),
+            "indexedVariables":item.children.iter().filter(|child| child.name.starts_with('[')).count(),
+            "memoryReference":item.address.map(|address| format!("0x{address:x}")),
+        }));
+    }
     let expression = parse_expression(source).map_err(|error| error.to_string())?;
     let mut names = Vec::new();
     collect_expression_names(&expression, &mut names);
@@ -892,9 +927,7 @@ fn set_named_value(
     if !item.writable {
         return Err(format!("{} is read-only", item.name));
     }
-    let address = item
-        .address
-        .ok_or_else(|| "expression has no writable address".to_owned())?;
+    let address = resolve_descriptor_address(worker, item)?;
     let (bytes, requested_value) = encode_scalar_source(source, item.scalar_kind, item.byte_width)?;
     let readback = match worker.call(WorkerCommand::WriteMemoryVerified {
         address,
@@ -971,9 +1004,29 @@ fn watch_for(item: &VariableDescriptor) -> WatchSpec {
     WatchSpec {
         id: item.id.clone(),
         address: item.address.unwrap_or_default(),
+        pointer_address: item.pointer_address,
+        pointer_offset: item.pointer_offset.unwrap_or_default(),
         byte_width: item.byte_width,
         scalar_kind: item.scalar_kind,
     }
+}
+
+fn resolve_descriptor_address(worker: &WorkerHandle, item: &VariableDescriptor) -> Result<u64, String> {
+    if let Some(address) = item.address { return Ok(address); }
+    let pointer_address = item.pointer_address
+        .ok_or_else(|| "expression has no writable address".to_owned())?;
+    let bytes = match worker.call(WorkerCommand::ReadMemory { address: pointer_address, length: 4 })? {
+        WorkerReply::Memory(bytes) => bytes,
+        _ => return Err("unexpected pointer read reply".into()),
+    };
+    let bytes: [u8; 4] = bytes.try_into().map_err(|_| "pointer read returned the wrong width")?;
+    let base = u64::from(u32::from_le_bytes(bytes));
+    if base == 0 { return Err(format!("pointer at 0x{pointer_address:08x} is null")); }
+    Ok(base.saturating_add(item.pointer_offset.unwrap_or_default()))
+}
+
+fn is_addressable(item: &VariableDescriptor) -> bool {
+    item.address.is_some() || item.pointer_address.is_some()
 }
 
 fn find_variable<'a>(
@@ -991,18 +1044,14 @@ fn find_variable<'a>(
     None
 }
 
-fn collect_scalar_variables<'a>(
+fn collect_variable_containers<'a>(
     catalog: &'a [VariableDescriptor],
     output: &mut Vec<&'a VariableDescriptor>,
 ) {
     for item in catalog {
-        if item.children.is_empty()
-            && item.address.is_some()
-            && matches!(item.byte_width, 1 | 2 | 4 | 8)
-        {
+        if !item.children.is_empty() {
             output.push(item);
-        } else {
-            collect_scalar_variables(&item.children, output);
+            collect_variable_containers(&item.children, output);
         }
     }
 }
@@ -1249,6 +1298,30 @@ mod tests {
         assert_eq!(display, "-2 (0xFFFE)");
         assert!(encode_scalar_source("256", ScalarKind::Unsigned, 1).is_err());
         assert!(encode_scalar_source("128", ScalarKind::Signed, 1).is_err());
+    }
+
+    #[test]
+    fn pointer_member_writes_resolve_the_current_pointee() {
+        let worker = spawn_worker(MockBackend::default());
+        worker.call(WorkerCommand::Connect(parse_probe_config("Cortex-M Mock", &json!({})))).unwrap();
+        let pointer_address = 0x2000_0100;
+        let pointee = 0x2000_0200_u32;
+        worker.call(WorkerCommand::WriteMemory { address: pointer_address, data: pointee.to_le_bytes().to_vec() }).unwrap();
+        let item = VariableDescriptor {
+            id: "pointer.value".into(), name: "value".into(), expression: "pointer->value".into(),
+            type_name: "float".into(), address: None, pointer_address: Some(pointer_address),
+            pointer_offset: Some(4), byte_width: 4, scalar_kind: ScalarKind::Float32,
+            writable: true, children: Vec::new(),
+        };
+        assert_eq!(resolve_descriptor_address(&worker, &item).unwrap(), u64::from(pointee) + 4);
+        let written = set_named_value(&worker, std::slice::from_ref(&item), &item.id, "3.5").unwrap();
+        assert_eq!(written["numericValue"], 3.5);
+        let bytes = match worker.call(WorkerCommand::ReadMemory { address: u64::from(pointee) + 4, length: 4 }).unwrap() {
+            WorkerReply::Memory(bytes) => bytes,
+            _ => panic!("unexpected read reply"),
+        };
+        assert_eq!(f32::from_le_bytes(bytes.try_into().unwrap()), 3.5);
+        let _ = worker.call_urgent(WorkerCommand::Shutdown);
     }
 
     #[test]

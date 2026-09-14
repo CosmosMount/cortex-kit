@@ -4,6 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { DapClient } from './dap-client.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const executable = path.join(root, 'target', 'debug', process.platform === 'win32' ? 'cortex-kit-dap.exe' : 'cortex-kit-dap');
@@ -28,6 +29,18 @@ test('mock DAP streams and permits only typed Live Watch writes in plot-only mod
   assert.equal(catalog.body.variables[0].children[0].expression, 'signal.sine_37hz');
   t.diagnostic('nested variable catalog received');
   const dataReady = await nextMatching(messages, message => message.type === 'event' && message.event === 'cortexKit.dataChannelReady');
+  const statics = await request('variables', { variablesReference: 2 });
+  const signal = statics.body.variables.find(item => item.name === 'signal');
+  assert.ok(signal.variablesReference >= 4);
+  assert.ok(!statics.body.variables.some(item => item.name === 'signal.sine_37hz'));
+  const members = await request('variables', { variablesReference: signal.variablesReference });
+  const sine = members.body.variables.find(item => item.evaluateName === 'signal.sine_37hz');
+  assert.equal(sine.variablesReference, 0);
+  assert.equal(sine.memoryReference, '0x20000000');
+  const page = await request('variables', { variablesReference: signal.variablesReference, start: 1, count: 1 });
+  assert.deepEqual(page.body.variables.map(item => item.evaluateName), [members.body.variables[1].evaluateName]);
+  const evaluated = await request('evaluate', { expression: 'signal' });
+  assert.equal(evaluated.body.variablesReference, signal.variablesReference);
   t.diagnostic('data channel announced');
   await request('cortexKit/setSubscriptions', { ids: ['mock.sine'], requestedSamplesPerSecond: 1000, backgroundIds: ['mock.sine', 'mock.ramp'], backgroundSamplesPerSecond: 20 });
   const frame = new Promise((resolve, reject) => {
@@ -62,6 +75,21 @@ test('mock DAP streams and permits only typed Live Watch writes in plot-only mod
   const registers = await request('cortexKit/readRegisters', { registers: [{ id: 'mock-register', address: '0x20000010', sizeBits: 32 }] });
   assert.equal(registers.body.values.length, 1);
   await request('disconnect', {});
+});
+
+test('native variable writes resolve children within the expanded parent', { timeout: 10_000 }, async t => {
+  const child = spawn(executable, ['--mock'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  t.after(() => child.kill());
+  const dap = new DapClient(child);
+  await dap.request('initialize', { adapterID: 'cortex-kit' });
+  await dap.request('attach', { chip: 'Cortex-M Mock', mockProbe: true, stopOnEntry: true, flashing: { enabled: false } });
+  const statics = await dap.request('variables', { variablesReference: 2 });
+  const signal = statics.variables.find(item => item.name === 'signal');
+  await dap.request('setVariable', { variablesReference: signal.variablesReference, name: 'sine_37hz', value: '7.25' });
+  const members = await dap.request('variables', { variablesReference: signal.variablesReference });
+  assert.equal(Number(members.variables.find(item => item.name === 'sine_37hz').value), 7.25);
+  await assert.rejects(dap.request('setVariable', { variablesReference: 2, name: 'sine_37hz', value: '8' }), /unknown child variable/);
+  await dap.request('disconnect');
 });
 
 async function nextMatching(iterator, predicate) { while (true) { const next = await iterator.next(); if (next.done) throw new Error('DAP stream ended'); if (predicate(next.value)) return next.value; } }

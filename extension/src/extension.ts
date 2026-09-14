@@ -5,7 +5,7 @@ import { registerFlashOutput } from './flashOutput';
 import { configuredProgramCandidates } from './launchConfig';
 import { validateLiveWatchInput } from './liveWatchModel';
 import { inspectElf, isDwarfImage, resolveConfiguredPath } from './offlineCatalog';
-import { expandVariableSelections, isPlottableVariable, isVariableSelection, plottableLeaves } from './plotModel';
+import { isPlottableVariable, plottableLeaves } from './plotModel';
 import { PlotViewProvider } from './plots';
 import { SampleRecorder } from './recorder';
 import { ThreadsView } from './threads';
@@ -13,6 +13,39 @@ import { selectProbeAndConnect, configureProbe, configureProject, defaultBackend
 import { inspectSvd } from './svdCatalog';
 import { SessionState, SvdTree, VariableDescriptor } from './types';
 import { LiveWatchNode, LiveWatchProvider, PeripheralNode, PeripheralsProvider, RegisterNode, SessionProvider, VariableNode, VariablesProvider } from './views';
+
+async function selectScalarMembers(
+  variable: VariableDescriptor,
+  title: string,
+  picked: (leaf: VariableDescriptor) => boolean = () => false,
+): Promise<VariableDescriptor[] | undefined> {
+  if (isPlottableVariable(variable)) { return [variable]; }
+  const leaves = plottableLeaves(variable);
+  if (!leaves.length) { return []; }
+  const selected = await vscode.window.showQuickPick(leaves.map(leaf => ({
+    label: `$(symbol-variable) ${leaf.expression}`,
+    description: leaf.typeName,
+    detail: `${variableLocation(leaf)}${variableLocation(leaf) ? ' · ' : ''}${leaf.byteWidth} byte${leaf.byteWidth === 1 ? '' : 's'}`,
+    picked: picked(leaf),
+    leaf,
+  })), {
+    title,
+    canPickMany: true,
+    matchOnDescription: true,
+    matchOnDetail: true,
+    placeHolder: `${variable.expression}：勾选需要监视的标量成员`,
+  });
+  return selected?.map(item => item.leaf);
+}
+
+function variableLocation(variable: VariableDescriptor): string {
+  if (variable.address !== undefined) { return `0x${variable.address.toString(16)}`; }
+  if (variable.pointerAddress !== undefined) {
+    const offset = variable.pointerOffset ?? 0;
+    return `*(0x${variable.pointerAddress.toString(16)})${offset ? ` + 0x${offset.toString(16)}` : ''}`;
+  }
+  return '';
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const variables = new VariablesProvider();
@@ -211,10 +244,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   register('cortexKit.searchVariables', async () => {
     if (!variables.hasVariables()) { await offlineIndex.refresh({ notify: true }); }
-    const items = variables.getVariables().filter(isVariableSelection).filter(item => !item.id.startsWith('expr:')).map(variable => ({
-      label: `${variable.children.length ? '$(symbol-struct)' : '$(symbol-variable)'} ${variable.expression}`,
-      description: variable.children.length ? `${variable.typeName} · ${plottableLeaves(variable).length} scalar fields` : variable.typeName,
-      detail: variable.children.length ? 'Select to add every scalar field recursively' : `${variable.address === undefined ? '' : `0x${variable.address.toString(16)} · `}${variable.byteWidth} byte${variable.byteWidth === 1 ? '' : 's'}`,
+    const items = variables.getVariables().filter(isPlottableVariable).filter(item => !item.id.startsWith('expr:')).map(variable => ({
+      label: `$(symbol-variable) ${variable.expression}`,
+      description: variable.typeName,
+      detail: `${variableLocation(variable)}${variableLocation(variable) ? ' · ' : ''}${variable.byteWidth} byte${variable.byteWidth === 1 ? '' : 's'}`,
       variable,
     }));
     if (!items.length) {
@@ -228,16 +261,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       placeHolder: 'Select structures, fields, or array elements to add to Plot',
     });
     if (!selected?.length) { return; }
-    await plots.addVariables(undefined, expandVariableSelections(selected.map(item => item.variable)));
+    await plots.addVariables(undefined, selected.map(item => item.variable));
     await vscode.commands.executeCommand('cortexKit.plots.focus');
   });
   register('cortexKit.addLiveWatch', async () => {
     if (!variables.hasVariables()) { await offlineIndex.refresh({ notify: true }); }
-    const items = variables.getVariables().filter(isVariableSelection).filter(item => !item.id.startsWith('expr:')).map(variable => ({
-      label: `${variable.children.length ? '$(symbol-struct)' : '$(symbol-variable)'} ${variable.expression}`,
-      description: variable.children.length ? `${variable.typeName} · ${plottableLeaves(variable).length} scalar fields` : variable.typeName,
-      detail: variable.children.length ? 'Select to add every scalar field recursively' : `${variable.address === undefined ? '' : `0x${variable.address.toString(16)} · `}${variable.writable ? 'read/write' : 'read-only'}`,
-      picked: plottableLeaves(variable).every(leaf => liveWatch.has(leaf.id)),
+    const items = variables.getVariables().filter(isPlottableVariable).filter(item => !item.id.startsWith('expr:')).map(variable => ({
+      label: `$(symbol-variable) ${variable.expression}`,
+      description: variable.typeName,
+      detail: `${variableLocation(variable)}${variableLocation(variable) ? ' · ' : ''}${variable.writable ? 'read/write' : 'read-only'}`,
+      picked: liveWatch.has(variable.id),
       variable,
     }));
     if (!items.length) { void vscode.window.showWarningMessage('No scalar ELF variables are available for Live Watch.'); return; }
@@ -248,13 +281,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       placeHolder: 'Select structures or individual fields for Live Watch; Plot selections are unchanged',
     });
     if (selected?.length) {
-      await liveWatch.add(expandVariableSelections(selected.map(item => item.variable)));
+      await liveWatch.add(selected.map(item => item.variable));
       if (latestState && isHalted(latestState)) { await refreshCurrentValues(true); }
     }
   });
   register('cortexKit.addVariableToLiveWatch', async (node?: VariableNode) => {
     if (node?.variable) {
-      await liveWatch.add(expandVariableSelections([node.variable]));
+      const selected = await selectScalarMembers(node.variable, '选择要加入 Live Watch 的内部变量', leaf => liveWatch.has(leaf.id));
+      if (!selected) { return; }
+      await liveWatch.add(selected);
       if (latestState && isHalted(latestState)) { await refreshCurrentValues(true); }
     }
   });
@@ -264,7 +299,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   register('cortexKit.clearLiveWatch', () => liveWatch.clear());
   register('cortexKit.addLiveWatchToPlot', async (node?: LiveWatchNode) => {
     if (!node) { return; }
-    await plots.addVariables(undefined, expandVariableSelections([node.variable]));
+    await plots.addVariables(undefined, node.variable);
     await vscode.commands.executeCommand('cortexKit.plots.focus');
   });
   register('cortexKit.writeLiveWatch', async (node?: LiveWatchNode) => {
@@ -303,7 +338,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     else { await refreshLiveWatchNow(); }
   });
   register('cortexKit.addChart', () => plots.addChart());
-  register('cortexKit.addVariableToPlot', (node?: VariableNode) => plots.addVariables(undefined, node ? expandVariableSelections([node.variable]) : undefined));
+  register('cortexKit.addVariableToPlot', (node?: VariableNode) => plots.addVariables(undefined, node?.variable));
   register('cortexKit.openPlots', () => vscode.commands.executeCommand('cortexKit.plots.focus'));
   register('cortexKit.openRecorder', () => recorder.open());
   register('cortexKit.readRegister', async (node?: RegisterNode) => {

@@ -93,7 +93,7 @@ async function main() {
     'data channel announcement',
   );
   const leaves = flatten(catalogEvent.body.variables)
-    .filter(item => item.address !== undefined && !item.children.length && [1, 2, 4, 8].includes(item.byteWidth));
+    .filter(item => (item.address !== undefined || item.pointerAddress !== undefined) && !item.children.length && [1, 2, 4, 8].includes(item.byteWidth));
   const representative = [
     'SysTime.ms',
     'SysTime.us',
@@ -616,7 +616,8 @@ function summarize(batches, selected, elapsedSeconds) {
       return {
         expression: item.expression,
         type: item.typeName,
-        address: `0x${item.address.toString(16)}`,
+        address: item.address !== undefined ? `0x${item.address.toString(16)}`
+          : `*(0x${item.pointerAddress.toString(16)}) + 0x${(item.pointerOffset ?? 0).toString(16)}`,
         samples: values.length,
         observedSamplesPerSecond: Math.round((values.length / elapsedSeconds) * 100) / 100,
         first: values[0],

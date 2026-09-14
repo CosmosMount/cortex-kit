@@ -35,7 +35,7 @@ function tokenize(source: string): Token[] {
     if (/\s/.test(source[index])) { index += 1; continue; }
     const rest = source.slice(index); const number = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i.exec(rest);
     if (number) { tokens.push({ kind: 'number', value: Number(number[0]) }); index += number[0].length; continue; }
-    const identifier = /^[A-Za-z_][A-Za-z0-9_.]*(?:\[\d+\])*/.exec(rest);
+    const identifier = /^[A-Za-z_][A-Za-z0-9_]*(?:(?:::|->|\.)[A-Za-z_][A-Za-z0-9_]*|\[\d+\])*/.exec(rest);
     if (identifier) { tokens.push({ kind: 'identifier', value: identifier[0] }); index += identifier[0].length; continue; }
     if (source[index] === '(') { tokens.push({ kind: 'left' }); index += 1; continue; }
     if (source[index] === ')') { tokens.push({ kind: 'right' }); index += 1; continue; }

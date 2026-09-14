@@ -14,6 +14,14 @@ npm test
 npm run test:dap
 ```
 
+With `arm-none-eabi-g++` on PATH (or `ARM_GXX` pointing to it), run
+`node --test tests/elf-instances-smoke.mjs` from the repository root after building
+the backend. This compiles a small C++ fixture with DWARF 4 and 5 and checks static
+member definitions, function-local singleton instances, namespace globals, nested
+array member addresses/types, and removal of duplicate untyped symbols. Set
+`CORTEX_KIT_BACKEND` to test a different backend build. The test is skipped when
+the optional Arm compiler is unavailable.
+
 The helper uses `cargo` from `PATH` when available. On this development machine it can also use the ignored, repository-local `.tooling` installation. The normal project does not install or modify an Arm GNU toolchain.
 
 ## Mock Probe in the Extension Development Host
@@ -60,7 +68,8 @@ If exactly one `.svd` exists in the workspace, Cortex Kit also discovers it auto
 
 - Adding a Plot or Live Watch subscription while the target is running performs a short automatic pause, updates the subscription, and resumes the target.
 - Editing a Live Watch value performs pause, typed write, flush, hardware readback, and resume as one adapter transaction.
-- Select a structure or array in the variable picker to add all addressable scalar descendants; individual fields remain selectable.
+- Expanding a structure or array exposes individually selectable scalar descendants. Invoking Plot or Live Watch on the container opens a member picker instead of adding every descendant automatically.
+- Global pointers with a DWARF pointee type expand with `->` member expressions. Their subscriptions dereference the current 32-bit Cortex-M pointer for each acquisition call; null pointees produce unavailable values without reading address zero or stopping unrelated channels.
 - In the Plot header, choose Auto grid, Side by side, or Stacked. Drag the handle at the left of a chart title to reorder charts.
 
 The native **Cortex Kit Live Watch** view is independent from Plot:

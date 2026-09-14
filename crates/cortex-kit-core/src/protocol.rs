@@ -66,7 +66,12 @@ pub struct VariableDescriptor {
     pub name: String,
     pub expression: String,
     pub type_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer_address: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer_offset: Option<u64>,
     pub byte_width: u8,
     pub scalar_kind: ScalarKind,
     pub writable: bool,

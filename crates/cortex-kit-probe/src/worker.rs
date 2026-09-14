@@ -49,6 +49,10 @@ pub struct Breakpoint {
 pub struct WatchSpec {
     pub id: String,
     pub address: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer_address: Option<u64>,
+    #[serde(default)]
+    pub pointer_offset: u64,
     pub byte_width: u8,
     pub scalar_kind: ScalarKind,
 }
@@ -838,6 +842,8 @@ mod tests {
         let watch = |id: &str, address| WatchSpec {
             id: id.into(),
             address,
+            pointer_address: None,
+            pointer_offset: 0,
             byte_width: 4,
             scalar_kind: ScalarKind::Float32,
         };

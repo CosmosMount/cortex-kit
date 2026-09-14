@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { isPlottableVariable } from './plotModel';
 import { PlotViewProvider } from './plots';
 import { csvCurves, csvHeader, csvRows, CsvTable, defaultTimeColumn, FrameSampler, parseCsv, RecordedRow, reducePoints, timeScale, validateSampleRate } from './recordingModel';
-import { SampleBatch } from './types';
+import { SampleBatch, VariableDescriptor } from './types';
 
 interface Recording {
   sampler: FrameSampler; stream: fs.WriteStream; uri: vscode.Uri; names: string[];
@@ -115,7 +115,7 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
   }
   private async selectVariables(): Promise<void> {
     const items = this.plots.getVariables().filter(item => isPlottableVariable(item) && !item.id.startsWith('expr:')).map(variable => ({
-      label: variable.expression, description: `${variable.typeName} · 0x${variable.address?.toString(16)}`,
+      label: variable.expression, description: `${variable.typeName} · ${variableLocation(variable)}`,
       picked: this.selectedIds.includes(variable.id), variable,
     }));
     if (!items.length) { throw new Error('尚无变量目录。请先配置含调试信息的 ELF，或启动 Cortex Kit 会话。'); }
@@ -141,7 +141,7 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
       const catalog = new Map(this.plots.getVariables().map(item => [item.id, item]));
       const names = this.selectedIds.map(id => {
         const variable = catalog.get(id);
-        if (!variable || variable.address === undefined) { throw new Error(`当前固件不包含变量 ${id}，请重新选择。`); }
+        if (!variable || !isPlottableVariable(variable)) { throw new Error(`当前固件不包含变量 ${id}，请重新选择。`); }
         return variable.expression;
       });
       const uri = await vscode.window.showSaveDialog({ title: '保存带时间戳的采样 CSV', filters: { CSV: ['csv'] },
@@ -263,6 +263,15 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
   private sendImported(): void {
     if (this.imported) { this.post({ type: 'curves', live: false, curves: csvCurves(this.imported, this.timeColumn, this.scale, this.columns) }); }
   }
+}
+
+function variableLocation(variable: VariableDescriptor): string {
+  if (variable.address !== undefined) { return `0x${variable.address.toString(16)}`; }
+  if (variable.pointerAddress !== undefined) {
+    const offset = variable.pointerOffset ?? 0;
+    return `*(0x${variable.pointerAddress.toString(16)})${offset ? ` + 0x${offset.toString(16)}` : ''}`;
+  }
+  return '<dynamic>';
 }
 
 export function recorderHtml(webview: vscode.Webview, media: vscode.Uri): string {

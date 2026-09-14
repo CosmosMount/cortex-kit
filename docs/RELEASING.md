@@ -3,7 +3,7 @@
 ## 当前发布目标
 
 - 扩展 ID：`CosmosMount.cortex-kit`
-- 扩展版本：`0.1.12`
+- 扩展版本：`0.1.13`
 - 平台：`win32-x64`；包含 Windows x64 Rust 后端，不作为跨平台包发布。
 - 产物：仓库根目录 `cortex-kit-win32-x64.vsix`
 - 许可证：根目录 `LICENSE`，扩展 manifest 与 Rust crates 均声明 MIT。

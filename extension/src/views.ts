@@ -5,10 +5,11 @@ import { LiveWatchValue, SessionState, SvdField, SvdPeripheral, SvdRegister, Svd
 export class VariableNode extends vscode.TreeItem {
   constructor(public readonly variable: VariableDescriptor, currentValue?: string) {
     super(variable.name, variable.children.length ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-    const metadata = `${variable.typeName}${variable.address === undefined ? '' : ` @ 0x${variable.address.toString(16)}`}`;
+    this.id = variable.id;
+    const metadata = `${variable.typeName}${formatVariableAddress(variable, ' @ ')}`;
     this.description = currentValue === undefined ? metadata : `${currentValue} · ${metadata}`;
     this.tooltip = `${variable.expression}\n${this.description}`;
-    this.contextValue = variable.address !== undefined && !variable.children.length && [1, 2, 4, 8].includes(variable.byteWidth) ? 'cortexKit.variable' : 'cortexKit.variableGroup';
+    this.contextValue = (variable.address !== undefined || variable.pointerAddress !== undefined) && !variable.children.length && [1, 2, 4, 8].includes(variable.byteWidth) ? 'cortexKit.variable' : 'cortexKit.variableGroup';
     this.iconPath = new vscode.ThemeIcon(variable.children.length ? 'symbol-struct' : 'symbol-variable');
   }
 }
@@ -27,12 +28,15 @@ export class VariablesProvider implements vscode.TreeDataProvider<VariableNode> 
   getVisibleScalarVariables(limit = 512): VariableDescriptor[] {
     const result: VariableDescriptor[] = [];
     const visit = (items: VariableDescriptor[]) => {
+      // Explicitly opened objects take priority over a large list of root scalars.
+      for (const item of items) {
+        if (result.length >= limit) { return; }
+        if (item.children.length && this.expanded.has(item.id)) { visit(item.children); }
+      }
       for (const item of items) {
         if (result.length >= limit) { return; }
         if (!item.children.length) {
-          if (item.address !== undefined && [1, 2, 4, 8].includes(item.byteWidth)) { result.push(item); }
-        } else if (this.expanded.has(item.id)) {
-          visit(item.children);
+          if ((item.address !== undefined || item.pointerAddress !== undefined) && [1, 2, 4, 8].includes(item.byteWidth)) { result.push(item); }
         }
       }
     };
@@ -64,7 +68,7 @@ export class LiveWatchNode extends vscode.TreeItem {
       '',
       `Value: \`${value}\`  `,
       `Type: \`${variable.typeName}\`  `,
-      `Address: \`${variable.address === undefined ? '<dynamic>' : `0x${variable.address.toString(16)}`}\`  `,
+      `Address: \`${formatVariableAddress(variable) || '<dynamic>'}\`  `,
       `Width: ${variable.byteWidth} byte${variable.byteWidth === 1 ? '' : 's'}  `,
       `Access: ${variable.writable ? 'read/write' : 'read-only'}`,
     ].join('\n'));
@@ -295,7 +299,7 @@ function liveWatchDetails(variable: VariableDescriptor, current?: LiveWatchValue
     entry('Value', value, 'symbol-number'),
     entry('Type', variable.typeName, 'symbol-type-parameter'),
     entry('Expression', variable.expression, 'symbol-variable'),
-    entry('Address', variable.address === undefined ? '<dynamic>' : `0x${variable.address.toString(16)}`, 'symbol-key'),
+    entry('Address', formatVariableAddress(variable) || '<dynamic>', 'symbol-key'),
     entry('Width', `${variable.byteWidth} byte${variable.byteWidth === 1 ? '' : 's'}`, 'symbol-ruler'),
     entry('Access', variable.writable ? 'read/write' : 'read-only', variable.writable ? 'edit' : 'lock'),
     entry('Update', updated, 'history'),
@@ -303,6 +307,14 @@ function liveWatchDetails(variable: VariableDescriptor, current?: LiveWatchValue
   ];
 }
 function liveWatchMessage(label: string): vscode.TreeItem { const item = new vscode.TreeItem(label); item.iconPath = new vscode.ThemeIcon('info'); return item; }
+function formatVariableAddress(variable: VariableDescriptor, prefix = ''): string {
+  if (variable.address !== undefined) { return `${prefix}0x${variable.address.toString(16)}`; }
+  if (variable.pointerAddress !== undefined) {
+    const offset = variable.pointerOffset ?? 0;
+    return `${prefix}*(0x${variable.pointerAddress.toString(16)})${offset ? ` + 0x${offset.toString(16)}` : ''}`;
+  }
+  return '';
+}
 function svdMessage(label: string): vscode.TreeItem {
   const item = new vscode.TreeItem(label);
   item.iconPath = new vscode.ThemeIcon(label.startsWith('Loading') ? 'loading~spin' : 'file-code');

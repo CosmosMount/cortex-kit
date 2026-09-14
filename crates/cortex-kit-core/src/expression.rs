@@ -231,6 +231,10 @@ impl Parser<'_> {
         while let Some(byte) = self.source.get(self.cursor) {
             if is_ident_continue(*byte) {
                 self.cursor += 1;
+            } else if self.source[self.cursor..].starts_with(b"::") {
+                self.cursor += 2;
+            } else if self.source[self.cursor..].starts_with(b"->") {
+                self.cursor += 2;
             } else {
                 break;
             }
@@ -297,6 +301,20 @@ fn is_ident_continue(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evaluates_scoped_instance_array_members() {
+        let name = "Motor::Instance::instance.samples[0].value";
+        let expression = parse_expression(&format!("{name} * 2")).unwrap();
+        assert_eq!(evaluate_expression(&expression, &HashMap::from([(name.into(), 3.0)])).unwrap(), 6.0);
+    }
+
+    #[test]
+    fn evaluates_pointer_member_names() {
+        let name = "robot::motor_pointer->samples[1].value";
+        let expression = parse_expression(&format!("{name} * 2")).unwrap();
+        assert_eq!(evaluate_expression(&expression, &HashMap::from([(name.into(), 2.5)])).unwrap(), 5.0);
+    }
 
     #[test]
     fn respects_precedence_and_dotted_names() {
