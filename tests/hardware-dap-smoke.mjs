@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { BatchDecoder } from './sample-batch-decoder.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const require = createRequire(import.meta.url);
-const { BatchDecoder } = require(path.join(root, 'extension', 'out', 'binaryProtocol.js'));
 const [
   programBinary,
   selector = 'auto',
@@ -121,7 +119,7 @@ async function main() {
     .filter(Boolean)
     .slice(0, channelCount);
   if (!selected.length) {
-    selected.push(...leaves.filter(item => item.address >= 0x20000000 && item.address < 0x40000000).slice(0, 4));
+    selected.push(...fallbackSelection(leaves, channelProfile, channelCount));
   }
   assert.ok(selected.length, 'ELF contains no addressable scalar variables');
 
@@ -146,20 +144,6 @@ async function main() {
   assert.ok(batches.length, 'no sample batches received');
   const acquisitionState = await dap.request('cortexKit/getState');
   assert.ok(!acquisitionState.lastError, acquisitionState.lastError);
-  let recordingCsv;
-  if (process.env.CORTEX_KIT_CSV) {
-    const { FrameSampler, csvHeader, csvRows, parseCsv } = require(path.join(root, 'extension', 'out', 'recordingModel.js'));
-    const recorded = customSelection ? selected.filter(item => customSelection.ids.includes(item.id)) : selected;
-    const sampler = new FrameSampler(recorded.map(item => item.id), Number(process.env.CORTEX_KIT_CSV_RATE ?? requestedSamplesPerSecond));
-    const rows = batches.flatMap(batch => sampler.accept(batch));
-    assert.ok(rows.length > 1, 'CSV recording received too few samples');
-    const csv = csvHeader(recorded.map(item => item.expression)) + csvRows(rows);
-    writeFileSync(process.env.CORTEX_KIT_CSV, csv, 'utf8');
-    const imported = parseCsv(readFileSync(process.env.CORTEX_KIT_CSV, 'utf8'));
-    assert.equal(imported.rows.length, rows.length);
-    assert.equal(imported.headers.length, recorded.length + 3);
-    recordingCsv = { path: process.env.CORTEX_KIT_CSV, rows: rows.length, requestedSamplesPerSecond: sampler.requestedHz, actualSamplesPerSecond: sampler.actualHz, elapsedSeconds: sampler.elapsedSeconds, roundTripVerified: true };
-  }
 
   let runningWrite = { enabled: false };
   if (verifyRunningWrite) {
@@ -356,7 +340,6 @@ async function main() {
     executable,
     selection: customSelection,
     acquisitionState,
-    recordingCsv,
     requestedSamplesPerSecond,
     channelProfile,
     channelCount: selected.length,
@@ -418,6 +401,9 @@ async function main() {
     if (stderr.trim()) console.error(stderr.trim());
     process.exitCode = 1;
   } else {
+    if (process.env.CORTEX_KIT_RESULT) {
+      writeFileSync(process.env.CORTEX_KIT_RESULT, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    }
     console.log(JSON.stringify(result, null, 2));
   }
 }
@@ -641,6 +627,36 @@ function range(values) {
 
 function flatten(items) {
   return items.flatMap(item => [item, ...flatten(item.children ?? [])]);
+}
+
+function fallbackSelection(leaves, profile, count) {
+  const byAddress = new Map();
+  for (const item of leaves) {
+    if (item.pointerAddress !== undefined
+      || item.address < 0x20000000
+      || item.address >= 0x40000000
+      || item.byteWidth !== 4
+      || byAddress.has(item.address)) continue;
+    byAddress.set(item.address, item);
+  }
+  const candidates = [...byAddress.values()].sort((left, right) => left.address - right.address);
+  if (candidates.length <= count) return candidates;
+  if (profile === 'representative') {
+    return Array.from({ length: count }, (_, index) => {
+      const position = Math.round(index * (candidates.length - 1) / Math.max(1, count - 1));
+      return candidates[position];
+    });
+  }
+  let bestStart = 0;
+  let bestSpan = Infinity;
+  for (let start = 0; start + count <= candidates.length; start += 1) {
+    const span = candidates[start + count - 1].address - candidates[start].address;
+    if (span < bestSpan) {
+      bestStart = start;
+      bestSpan = span;
+    }
+  }
+  return candidates.slice(bestStart, bestStart + count);
 }
 
 function parseBoolean(value, label) {

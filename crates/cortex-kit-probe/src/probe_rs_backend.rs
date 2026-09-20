@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use cortex_kit_core::{MemoryClass, ReadRequest, TargetState, plan_reads};
+use cortex_kit_core::{MemoryClass, ReadRequest, ScalarKind, TargetState, plan_reads};
 use probe_rs::{
     CoreStatus, HaltReason, MemoryInterface, Session,
     flashing::{BinOptions, DownloadOptions, Format, download_file_with_options},
@@ -13,6 +13,11 @@ use probe_rs::{
 use probe_rs_debug::DebugRegisters;
 
 use crate::{Backend, Breakpoint, ProbeConfig, ProbeInfo, RegisterValue, StepKind, WatchSpec};
+
+const MAX_NORMAL_RAM_GAP: usize = 32;
+// probe-rs splits at the ARM MEM-AP 1 KiB auto-increment boundary. A bounded
+// 4 KiB plan avoids repeated outer calls and allocations across those chunks.
+const MAX_NORMAL_RAM_BLOCK: usize = 4096;
 
 pub fn list_probes() -> Vec<ProbeInfo> {
     Lister::new()
@@ -51,6 +56,78 @@ pub struct ProbeRsBackend {
     session: Option<Session>,
     name: String,
     installed_breakpoints: BTreeSet<u64>,
+    read_plan: Option<CachedReadPlan>,
+}
+
+struct CachedReadBlock {
+    address: u64,
+    byte_len: usize,
+    mappings: Vec<(usize, usize, u8, ScalarKind)>,
+    scatter_slot: Option<usize>,
+}
+
+struct CachedReadPlan {
+    watches: Vec<WatchSpec>,
+    blocks: Vec<CachedReadBlock>,
+    scatter_addresses: Vec<u64>,
+    scatter_values: Vec<u32>,
+    scratch: Vec<u8>,
+    frame: Vec<f64>,
+}
+
+impl CachedReadPlan {
+    fn new(watches: &[WatchSpec]) -> Self {
+        let requests = watches
+            .iter()
+            .map(|watch| ReadRequest {
+                variable_id: watch.id.clone(),
+                address: watch.address,
+                byte_width: watch.byte_width,
+                memory_class: classify_address(watch.address),
+            })
+            .collect::<Vec<_>>();
+        let channels = watches
+            .iter()
+            .enumerate()
+            .map(|(index, watch)| (watch.id.as_str(), (index, watch.scalar_kind)))
+            .collect::<HashMap<_, _>>();
+        let mut blocks = plan_reads(&requests, MAX_NORMAL_RAM_GAP, MAX_NORMAL_RAM_BLOCK)
+            .into_iter()
+            .map(|block| CachedReadBlock {
+                address: block.address,
+                byte_len: block.byte_len,
+                mappings: block
+                    .variables
+                    .into_iter()
+                    .filter_map(|mapping| {
+                        channels
+                            .get(mapping.variable_id.as_str())
+                            .map(|(channel, kind)| {
+                                (*channel, mapping.offset, mapping.byte_width, *kind)
+                            })
+                    })
+                    .collect(),
+                scatter_slot: None,
+            })
+            .collect::<Vec<_>>();
+        let mut scatter_addresses = Vec::new();
+        for block in &mut blocks {
+            if block.byte_len == 4 {
+                block.scatter_slot = Some(scatter_addresses.len());
+                scatter_addresses.push(block.address);
+            }
+        }
+        let scatter_values = vec![0; scatter_addresses.len()];
+        let scratch = vec![0; blocks.iter().map(|block| block.byte_len).max().unwrap_or(0)];
+        Self {
+            watches: watches.to_vec(),
+            blocks,
+            scatter_addresses,
+            scatter_values,
+            scratch,
+            frame: vec![f64::NAN; watches.len()],
+        }
+    }
 }
 
 impl Backend for ProbeRsBackend {
@@ -119,6 +196,7 @@ impl Backend for ProbeRsBackend {
     }
     fn disconnect(&mut self) {
         self.installed_breakpoints.clear();
+        self.read_plan = None;
         self.session = None;
     }
     fn halt(&mut self) -> Result<(), String> {
@@ -286,6 +364,9 @@ impl Backend for ProbeRsBackend {
         Ok(())
     }
     fn sample(&mut self, watches: &[WatchSpec], frames: usize) -> Result<Vec<f64>, String> {
+        if watches.iter().all(|watch| watch.pointer_address.is_none()) {
+            return self.sample_cached(watches, frames);
+        }
         let mut core = self.core()?;
         let mut pointer_values = HashMap::new();
         for address in watches.iter().filter_map(|watch| watch.pointer_address) {
@@ -316,7 +397,7 @@ impl Backend for ProbeRsBackend {
                 memory_class: classify_address(watch.address),
             })
             .collect::<Vec<_>>();
-        let blocks = plan_reads(&requests, 0);
+        let blocks = plan_reads(&requests, MAX_NORMAL_RAM_GAP, MAX_NORMAL_RAM_BLOCK);
         let channels = watches
             .iter()
             .enumerate()
@@ -351,6 +432,56 @@ impl Backend for ProbeRsBackend {
 }
 
 impl ProbeRsBackend {
+    fn sample_cached(&mut self, watches: &[WatchSpec], frames: usize) -> Result<Vec<f64>, String> {
+        if self
+            .read_plan
+            .as_ref()
+            .is_none_or(|plan| plan.watches != watches)
+        {
+            self.read_plan = Some(CachedReadPlan::new(watches));
+        }
+        let mut plan = self.read_plan.take().expect("read plan initialized");
+        let result = (|| {
+            let mut core = self.core()?;
+            let mut output = Vec::with_capacity(watches.len() * frames);
+            let CachedReadPlan {
+                blocks,
+                scatter_addresses,
+                scatter_values,
+                scratch,
+                frame,
+                ..
+            } = &mut plan;
+            for _ in 0..frames {
+                frame.fill(f64::NAN);
+                if !scatter_addresses.is_empty() {
+                    core.read_32_scattered(scatter_addresses, scatter_values)
+                        .map_err(|error| error.to_string())?;
+                }
+                for block in blocks.iter() {
+                    if let Some(slot) = block.scatter_slot {
+                        let bytes = scatter_values[slot].to_le_bytes();
+                        for &(channel, offset, byte_width, kind) in &block.mappings {
+                            let width = usize::from(byte_width.min(4));
+                            frame[channel] = decode(&bytes[offset..offset + width], kind);
+                        }
+                        continue;
+                    }
+                    core.read(block.address, &mut scratch[..block.byte_len])
+                        .map_err(|error| error.to_string())?;
+                    for &(channel, offset, byte_width, kind) in &block.mappings {
+                        let width = usize::from(byte_width.min(8));
+                        frame[channel] = decode(&scratch[offset..offset + width], kind);
+                    }
+                }
+                output.extend_from_slice(frame);
+            }
+            Ok(output)
+        })();
+        self.read_plan = Some(plan);
+        result
+    }
+
     fn core(&mut self) -> Result<probe_rs::Core<'_>, String> {
         self.session
             .as_mut()
@@ -515,6 +646,57 @@ mod attach_diagnostics_tests {
             TargetState::Halted {
                 reason: "breakpoint".into()
             }
+        );
+    }
+
+    fn watch(id: &str, address: u64, byte_width: u8, scalar_kind: ScalarKind) -> WatchSpec {
+        WatchSpec {
+            id: id.into(),
+            address,
+            pointer_address: None,
+            pointer_offset: 0,
+            byte_width,
+            scalar_kind,
+        }
+    }
+
+    #[test]
+    fn caches_disjoint_words_as_one_scatter_transaction() {
+        let plan = CachedReadPlan::new(&[
+            watch("first", 0x2000_0000, 4, ScalarKind::Unsigned),
+            watch("second", 0x2000_1000, 4, ScalarKind::Float32),
+            watch("third", 0x4000_0010, 4, ScalarKind::Unsigned),
+        ]);
+
+        assert_eq!(
+            plan.scatter_addresses,
+            [0x2000_0000, 0x2000_1000, 0x4000_0010]
+        );
+        assert_eq!(plan.scatter_values, [0, 0, 0]);
+        assert_eq!(
+            plan.blocks
+                .iter()
+                .map(|block| block.scatter_slot)
+                .collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn leaves_contiguous_and_wide_blocks_on_normal_memory_reads() {
+        let plan = CachedReadPlan::new(&[
+            watch("left", 0x2000_0000, 4, ScalarKind::Unsigned),
+            watch("right", 0x2000_0004, 4, ScalarKind::Unsigned),
+            watch("wide", 0x2000_1000, 8, ScalarKind::Float64),
+        ]);
+
+        assert!(plan.scatter_addresses.is_empty());
+        assert_eq!(
+            plan.blocks
+                .iter()
+                .map(|block| (block.address, block.byte_len, block.scatter_slot))
+                .collect::<Vec<_>>(),
+            [(0x2000_0000, 8, None), (0x2000_1000, 8, None),]
         );
     }
 }

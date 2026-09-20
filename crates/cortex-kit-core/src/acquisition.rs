@@ -33,7 +33,11 @@ pub struct ReadMapping {
 
 /// Build deterministic read blocks. Only normal RAM is merged; peripheral and
 /// special addresses stay isolated because adjacent reads may have side effects.
-pub fn plan_reads(requests: &[ReadRequest], max_ram_gap: usize) -> Vec<ReadBlock> {
+pub fn plan_reads(
+    requests: &[ReadRequest],
+    max_ram_gap: usize,
+    max_ram_block: usize,
+) -> Vec<ReadBlock> {
     let mut ordered = requests.to_vec();
     ordered.sort_by_key(|request| (request.memory_class as u8, request.address));
     ordered.dedup_by(|right, left| {
@@ -54,11 +58,13 @@ pub fn plan_reads(requests: &[ReadRequest], max_ram_gap: usize) -> Vec<ReadBlock
         let can_merge = request.memory_class == MemoryClass::Ram;
         if let Some(block) = blocks.last_mut() {
             let block_end = block.address.saturating_add(block.byte_len as u64);
+            let merged_len = end.max(block_end).saturating_sub(block.address) as usize;
             if can_merge
                 && block.memory_class == MemoryClass::Ram
                 && start <= block_end.saturating_add(max_ram_gap as u64)
+                && merged_len <= max_ram_block
             {
-                block.byte_len = end.max(block_end).saturating_sub(block.address) as usize;
+                block.byte_len = merged_len;
                 block.variables.push(ReadMapping {
                     variable_id: request.variable_id,
                     offset: request.address.saturating_sub(block.address) as usize,
@@ -115,9 +121,25 @@ mod tests {
                 },
             ],
             0,
+            usize::MAX,
         );
         assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0].byte_len, 8);
+        assert_eq!(blocks[0].variables.len(), 2);
+    }
+
+    #[test]
+    fn merges_small_ram_gaps_but_caps_each_transfer() {
+        let requests = [0x2000, 0x2010, 0x2020].map(|address| ReadRequest {
+            variable_id: format!("v{address:x}"),
+            address,
+            byte_width: 4,
+            memory_class: MemoryClass::Ram,
+        });
+        let blocks = plan_reads(&requests, 16, 24);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].address, 0x2000);
+        assert_eq!(blocks[0].byte_len, 20);
         assert_eq!(blocks[0].variables.len(), 2);
     }
 }
