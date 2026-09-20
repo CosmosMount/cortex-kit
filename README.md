@@ -35,7 +35,7 @@ code --install-extension .\cortex-kit-win32-x64.vsix
 
 执行 **Cortex Kit: Configure Probe / Sampling** 可修改已有配置的探针、协议、时钟、连接方式和请求采样率，同时保留芯片、固件、SVD 等配置。
 
-**DAPLink 已通过 CMSIS-DAP 后端接入。** Horco CMSIS-DAP 已使用 `robomaster/pnx_template` 的 STM32H723VG 固件验证连接、烧录、校验、复位、连续压力采样、暂停和继续；不同 DAPLink 固件仍需分别验证。ST-Link 同样已验证连接、采样、烧录与校验。更多实测见 [pnx_template DAPLink 压力测试](docs/performance/2026-09-20/DAPLINK_ROBOMASTER_PNX_TEMPLATE.md)。
+**DAPLink 已通过 CMSIS-DAP 后端接入。** Horco CMSIS-DAP 已使用 `robomaster/pnx_template` 的 STM32H723VG 固件验证连接、烧录、校验、复位、连续压力采样、暂停和继续；不同 DAPLink 固件仍需分别验证。ST-Link 同样已验证连接、采样、烧录与校验。
 
 ### 手动配置示例
 
@@ -102,7 +102,7 @@ CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量..
 - **Cortex Kit: Import Cortex-Debug Configuration**：从已有 Cortex-Debug 配置导入可识别字段，连接前检查目标、固件和探针设置。
 - **Cortex Kit: Mock Debug**：无硬件时体验模拟调试与采样。
 
-当前支持基础暂停 / 继续、硬件断点、单指令步进、CPU 寄存器和内存访问。真实调用栈展开、帧局部变量、源码级 Step Over / Out 和完整反汇编尚未完成，详见 [实现状态](docs/IMPLEMENTATION_STATUS.md)。
+当前支持基础暂停 / 继续、硬件断点、单指令步进、CPU 寄存器和内存访问。真实调用栈展开、帧局部变量、源码级 Step Over / Out 和完整反汇编尚未完成。
 
 ## 尽量提高采样速度
 
@@ -117,7 +117,7 @@ CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量..
 | `cortexKit.chartRefreshRate` | Plot 绘制刷新率，默认 30 FPS，不是采样率 |
 | `cortexKit.historySeconds` | Plot 滚动显示与保留时长，不会定时停止 Sample |
 
-减少同时监视的变量，优先使用地址连续的普通 RAM 变量，再观察实际速率和丢帧。图表之间的重复变量会共享读取。CMSIS-DAP 返回的时钟是请求上限，不能据此认定实际物理时钟；提高时钟未必提高吞吐量。使用 `robomaster/pnx_template`、STM32H723VG 和 Horco CMSIS-DAP 的最终 30 秒实测中，8 个连续浮点通道为 371.78 S/s，32 个分散 32 位通道为 83.65 S/s，均为零读错、零丢帧；完整条件见 [pnx_template DAPLink 压力测试](docs/performance/2026-09-20/DAPLINK_ROBOMASTER_PNX_TEMPLATE.md)。
+减少同时监视的变量，优先使用地址连续的普通 RAM 变量，再观察实际速率和丢帧。图表之间的重复变量会共享读取。CMSIS-DAP 返回的时钟是请求上限，不能据此认定实际物理时钟；提高时钟未必提高吞吐量。使用 `robomaster/pnx_template`、STM32H723VG 和 Horco CMSIS-DAP 的最终 30 秒实测中，8 个连续浮点通道为 371.78 S/s，32 个分散 32 位通道为 83.65 S/s，均为零读错、零丢帧。
 
 ## 常见问题
 

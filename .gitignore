@@ -1,6 +1,7 @@
 /target/
 /.tooling/
 /.tmp/
+/.agents/docs/
 /extension/node_modules/
 /extension/out/
 /extension/bin/
