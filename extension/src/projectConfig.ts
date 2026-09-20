@@ -141,7 +141,7 @@ export async function configureProject(backendPath: string): Promise<void> {
     ...(selectedTask?.task ? { preLaunchTask: selectedTask.task.name } : {}),
     probe: settings.probe,
     flashing: { enabled: Boolean(selectedBinary?.uri), verify: true, resetAfter: true },
-    acquisition: { requestedSamplesPerSecond: settings.requestedSamplesPerSecond, maxBurstMs: 2, historySeconds: 30 },
+    acquisition: { requestedSamplesPerSecond: settings.requestedSamplesPerSecond, historySeconds: 30 },
     svdFile: relative(selectedSvd?.uri) ?? null,
   };
   const liveConfiguration: Record<string, unknown> = {

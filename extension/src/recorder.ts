@@ -1,54 +1,79 @@
-import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 import { isPlottableVariable } from './plotModel';
 import { PlotViewProvider } from './plots';
-import { csvCurves, csvHeader, csvRows, CsvTable, defaultTimeColumn, FrameSampler, parseCsv, RecordedRow, reducePoints, timeScale, validateSampleRate } from './recordingModel';
-import { SampleBatch, VariableDescriptor } from './types';
+import { VariableDescriptor } from './types';
+import { NativePreview } from './nativeData';
 
-interface Recording {
-  sampler: FrameSampler; stream: fs.WriteStream; uri: vscode.Uri; names: string[];
-  ready: boolean; preview: RecordedRow[]; droppedStart?: number; dropped: number; waitingForSamples?: boolean;
-}
-
-/** A docked view in the Cortex Kit bottom panel; shares the existing sample socket. */
+/** A docked view backed exclusively by the Rust data core. */
 export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Disposable {
+  private nativeRecording = false;
+  private nativePolling = false;
+  private nativeLastPreview?: NativePreview;
+  private async refreshNative(): Promise<void> {
+    if (!this.nativeRecording || this.nativePolling) return;
+    this.nativePolling = true;
+    try {
+      const status = await this.plots.nativeRecordingStatus();
+      if (!this.nativeRecording) return;
+      this.lastStats = { rows: status.rows, actualHz: status.actualHz, elapsedSeconds: status.elapsedSeconds, dropped: status.dropped + status.overflowFrames };
+      if (status.error) { this.error = true; this.status = status.error; }
+      else if (status.connectionBreaks) { this.error = true; this.status = `采样链路中断 ${status.connectionBreaks} 次，缺失样本数未知；只记录实际收到的行。`; }
+      if (this.panel?.visible) {
+        // Display failure/overload does not stop or restart the writer.
+        try { const preview = await this.plots.nativeRecordingPreview(); if (preview) { this.nativeLastPreview = preview; this.post({ type: 'curves', ...preview }); } }
+        catch { /* Numeric recording status below remains available independently. */ }
+      }
+      if (!status.recording && !status.closing && this.nativeRecording && !this.stopping) {
+        this.nativeRecording = false;
+        if (!status.error) this.status = 'Rust 记录已结束并刷新到文件。';
+        await this.plots.setRecordingSubscription([]);
+      }
+      this.snapshot();
+    } catch (error) { this.fail(error); }
+    finally { this.nativePolling = false; }
+  }
+  private stopNative(message: string, failed: boolean): Promise<void> {
+    if (this.stopping) return this.stopping;
+    this.stopping = (async () => {
+      try {
+        const status = await this.plots.stopNativeRecording();
+        this.lastStats = { rows: status.rows, actualHz: status.actualHz, elapsedSeconds: status.elapsedSeconds, dropped: status.dropped + status.overflowFrames };
+        this.status = status.error || (status.rows ? message : '记录已结束，CSV 只有表头；未收到所选变量的实际样本。');
+        this.error = failed || Boolean(status.error) || Boolean(status.connectionBreaks);
+        if (!status.error && status.connectionBreaks) this.status += ` 链路中断 ${status.connectionBreaks} 次，缺失样本数未知。`;
+      } catch (error) { this.fail(error); }
+      finally {
+        this.nativeRecording = false;
+        try { await this.plots.setRecordingSubscription([]); } catch (error) { this.fail(error); }
+        this.stopping = undefined; this.snapshot();
+      }
+    })();
+    this.snapshot(); return this.stopping;
+  }
   private panel?: vscode.WebviewView;
   private selectedIds: string[];
   private requestedHz: number;
-  private recording?: Recording;
   private busy = false;
-  private status = '选择变量后开始记录，或导入 CSV 离线查看曲线。';
+  private status = '选择变量后开始记录；采样、抽样和 CSV 写入全部由 Rust 完成。';
   private error = false;
   private file?: vscode.Uri;
-  private imported?: CsvTable;
-  private timeColumn = 0;
-  private scale = 1;
-  private columns: number[] = [];
   private lastStats = { rows: 0, actualHz: 0, elapsedSeconds: 0, dropped: 0 };
   private readonly subscriptions: vscode.Disposable[];
   private readonly refreshTimer: NodeJS.Timeout;
-  private dirty = false;
   private stopping?: Promise<void>;
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly plots: PlotViewProvider) {
     this.selectedIds = context.workspaceState.get<string[]>('cortexKit.recorder.variables', []);
     this.requestedHz = context.workspaceState.get<number>('cortexKit.recorder.rate', 1000);
     this.subscriptions = [
-      plots.onDidReceiveSamples(batch => this.acceptBatch(batch)),
-      plots.onDidReceiveStreamError(error => {
-        if (this.recording) {
-          this.recording.waitingForSamples = true;
-          this.fail(`采样暂时中断，记录任务保持运行并等待数据恢复：${error}`);
-        }
-      }),
       plots.onDidChangeSession(() => {
-        if (this.recording) { void this.stop('目标会话已结束或切换，记录已保存。'); }
+        if (this.nativeRecording) { void this.stop('目标会话已结束或切换，记录已保存。'); }
         this.snapshot();
       }),
     ];
-    this.refreshTimer = setInterval(() => { if (this.dirty && this.panel?.visible) { this.dirty = false; this.sendPreview(); this.snapshot(); } }, 250);
+    this.refreshTimer = setInterval(() => { void this.refreshNative(); }, 250);
   }
-  get isRecording(): boolean { return Boolean(this.recording || this.busy || this.stopping); }
+  get isRecording(): boolean { return Boolean(this.nativeRecording || this.busy || this.stopping); }
   dispose(): void {
     clearInterval(this.refreshTimer);
     this.subscriptions.forEach(item => item.dispose());
@@ -65,21 +90,19 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     view.webview.html = recorderHtml(view.webview, media);
     view.webview.onDidReceiveMessage(message => { void this.handle(message).catch(error => this.fail(error)); });
     view.onDidChangeVisibility(() => {
-      if (view.visible) { this.snapshot(); if (this.imported) { this.sendImported(); } else { this.sendPreview(); } }
+      if (view.visible) { this.snapshot(); this.sendPreview(); }
     });
     // Recording belongs to the extension/session, not to the disposable view.
     view.onDidDispose(() => { if (this.panel === view) { this.panel = undefined; } });
   }
   private post(message: unknown): void { void this.panel?.webview.postMessage(message); }
   private snapshot(): void {
+    if (!this.panel?.visible) return;
     const catalog = new Map(this.plots.getVariables().map(item => [item.id, item]));
-    const recording = this.recording;
-    const stats = recording ? { rows: recording.sampler.count, actualHz: recording.sampler.actualHz, elapsedSeconds: recording.sampler.elapsedSeconds, dropped: recording.dropped } : this.lastStats;
-    this.post({ type: 'state', recording: Boolean(recording), busy: this.busy || Boolean(this.stopping),
+    this.post({ type: 'state', recording: this.nativeRecording, busy: this.busy || Boolean(this.stopping),
       connected: Boolean(this.plots.session), selected: this.selectedIds.map(id => catalog.get(id)?.expression ?? id),
       requestedHz: this.requestedHz, status: this.status, error: this.error,
-      file: this.file?.fsPath, ...stats,
-      imported: this.imported ? { headers: this.imported.headers, rows: this.imported.rows.length, timeColumn: this.timeColumn, scale: this.scale, columns: this.columns } : undefined,
+      file: this.file?.fsPath, ...this.lastStats,
     });
   }
   private fail(error: unknown): void {
@@ -88,30 +111,15 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     this.snapshot();
   }
   private async handle(message: Record<string, unknown>): Promise<void> {
-    if (message.type === 'ready') { this.snapshot(); if (this.imported) { this.sendImported(); } else { this.sendPreview(); } return; }
+    if (message.type === 'ready') { this.snapshot(); this.sendPreview(); return; }
     if (message.type === 'stop') { await this.stop(); return; }
     if (message.type === 'reveal' && this.file) { await vscode.commands.executeCommand('revealFileInOS', this.file); return; }
-    if (message.type === 'view' && this.imported && !this.isRecording) {
-      const timeColumn = Number(message.timeColumn), scale = Number(message.scale);
-      const columns = Array.isArray(message.columns) ? message.columns.map(Number) : [];
-      const range = Array.isArray(message.range) && message.range.length === 2 && message.range.every(Number.isFinite)
-        ? message.range.map(Number) as [number, number] : undefined;
-      const curves = csvCurves(this.imported, timeColumn, scale, columns, range);
-      this.timeColumn = timeColumn; this.scale = scale; this.columns = columns;
-      this.error = false; this.status = '已更新曲线。滚轮缩放、拖动平移，悬停查看最近的预览样本。';
-      const elapsedSeconds = (this.imported.rows.at(-1)![timeColumn]! - this.imported.rows[0][timeColumn]!) * scale;
-      this.lastStats = { ...this.lastStats, elapsedSeconds, actualHz: elapsedSeconds > 0 ? (this.imported.rows.length - 1) / elapsedSeconds : 0 };
-      this.post({ type: 'curves', curves, live: false, preserveRange: Boolean(range) });
-      this.snapshot();
-      return;
-    }
     if (this.isRecording) { return; }
     if (message.type === 'select') {
       this.busy = true; this.snapshot();
       try { await this.selectVariables(); } finally { this.busy = false; this.snapshot(); }
     }
     if (message.type === 'start') { await this.start(Number(message.rate)); }
-    if (message.type === 'import') { await this.importCsv(); }
   }
   private async selectVariables(): Promise<void> {
     const items = this.plots.getVariables().filter(item => isPlottableVariable(item) && !item.id.startsWith('expr:')).map(variable => ({
@@ -129,7 +137,7 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
   private async start(rate: number): Promise<void> {
     const panel = this.panel;
     if (!panel) { return; }
-    validateSampleRate(rate);
+    validateRecordingRate(rate);
     this.busy = true; this.error = false; this.snapshot();
     try {
       if (!this.selectedIds.length) { await this.selectVariables(); }
@@ -152,20 +160,16 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
       this.requestedHz = rate;
       await this.context.workspaceState.update('cortexKit.recorder.rate', rate);
       if (this.panel !== panel) { return; }
-      const stream = fs.createWriteStream(uri.fsPath, { encoding: 'utf8' });
-      const recording: Recording = { sampler: new FrameSampler([...this.selectedIds], rate), stream, uri, names, ready: false, preview: [], dropped: 0 };
-      // Keep an error listener installed after stop as a late disk error must never crash the extension host.
-      stream.on('error', error => { if (this.recording === recording) { void this.stop(`CSV 写入失败：${error.message}`, true); } else { this.fail(error); } });
-      this.recording = recording; this.file = uri; this.imported = undefined;
+      this.file = uri; this.nativeLastPreview = undefined;
+      this.lastStats = { rows: 0, actualHz: 0, elapsedSeconds: 0, dropped: 0 };
+      await this.plots.startNativeRecording({ path: uri.fsPath, ids: [...this.selectedIds], names, rate });
+      this.nativeRecording = true;
       this.post({ type: 'clear' });
-      await new Promise<void>((resolve, reject) => { stream.once('open', () => resolve()); stream.once('error', reject); });
-      stream.write(csvHeader(names));
       await this.plots.setRecordingSubscription(this.selectedIds, rate);
-      if (this.recording !== recording || this.plots.session?.id !== session.id) { throw new Error('记录启动时会话已结束。'); }
-      recording.ready = true;
-      this.status = '持续后台记录，点击“停止并保存”结束。切换或关闭采样视图不影响记录；暂停目标时保留时间间隔。';
+      if (this.plots.session?.id !== session.id) throw new Error('目标会话在 Rust 记录启动期间改变。');
+      this.status = 'Rust 独立线程持续写入 CSV；关闭 Plot 或 Sample 面板不停止记录。';
     } catch (error) {
-      if (this.recording) { await this.stop(error instanceof Error ? error.message : String(error), true); }
+      if (this.nativeRecording) { await this.stop(error instanceof Error ? error.message : String(error), true); }
       throw error;
     } finally { this.busy = false; this.snapshot(); }
   }
@@ -185,84 +189,17 @@ export class SampleRecorder implements vscode.WebviewViewProvider, vscode.Dispos
     if (!connected) { throw new Error('无法启动目标连接。'); }
     await this.plots.waitForDataChannel();
   }
-  private acceptBatch(batch: SampleBatch): void {
-    const recording = this.recording;
-    if (!recording?.ready) { return; }
-    try {
-      if (recording.stream.writableLength > 8 * 1024 * 1024) { throw new Error('磁盘写入跟不上采样，已停止记录并保存已接收数据。'); }
-      const rows = recording.sampler.accept(batch);
-      if (!rows.length) { return; }
-      if (recording.waitingForSamples) {
-        recording.waitingForSamples = false; this.error = false;
-        this.status = '采样已恢复，继续后台记录到同一 CSV；中断期间保留真实时间间隔。';
-      }
-      recording.droppedStart ??= batch.droppedFrames;
-      recording.dropped = Math.max(0, batch.droppedFrames - recording.droppedStart);
-      recording.stream.write(csvRows(rows));
-      recording.preview.push(...rows);
-      if (recording.preview.length > 4000) { recording.preview.splice(0, recording.preview.length - 4000); }
-      this.dirty = true;
-    } catch (error) { void this.stop(error instanceof Error ? error.message : String(error), true); }
-  }
   private async stop(message = '记录已停止，CSV 已保存。', failed = false): Promise<void> {
-    if (this.stopping) { return this.stopping; }
-    const recording = this.recording;
-    if (!recording) { return; }
-    this.sendPreview();
-    this.recording = undefined;
-    this.lastStats = { rows: recording.sampler.count, actualHz: recording.sampler.actualHz, elapsedSeconds: recording.sampler.elapsedSeconds, dropped: recording.dropped };
-    this.stopping = (async () => {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          if (recording.stream.destroyed) { resolve(); return; }
-          recording.stream.once('error', reject); recording.stream.end(resolve);
-        });
-        this.status = recording.sampler.count ? message : '记录已结束，未收到样本（CSV 仅有表头）。请确认目标正在运行。';
-        this.error = failed;
-      } catch (error) { this.fail(error); }
-      finally {
-        try { await this.plots.setRecordingSubscription([]); } catch (error) { this.fail(error); }
-        this.stopping = undefined; this.snapshot();
-      }
-    })();
-    this.snapshot();
-    return this.stopping;
+    if (!this.nativeRecording) return;
+    return this.stopNative(message, failed);
   }
   private sendPreview(): void {
-    const recording = this.recording;
-    if (!recording?.preview.length) { return; }
-    const limit = Math.max(100, Math.floor(12000 / recording.names.length));
-    this.post({ type: 'curves', live: true, curves: recording.names.map((name, index) => ({ name,
-      points: reducePoints(recording.preview.flatMap((row, i): Array<[number, number | null]> => {
-        const point: [number, number | null] = [row.elapsedSeconds, Number.isFinite(row.values[index]) ? row.values[index] : null];
-        return i > 0 && row.streamEpoch !== recording.preview[i - 1].streamEpoch ? [[row.elapsedSeconds, null], point] : [point];
-      }), limit),
-    })) });
+    if (this.nativeLastPreview) this.post({ type: 'curves', ...this.nativeLastPreview });
   }
-  private async importCsv(): Promise<void> {
-    const chosen = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { CSV: ['csv'] }, title: '导入时间序列 CSV' });
-    if (!chosen?.[0]) { return; }
-    this.busy = true; this.snapshot();
-    try {
-      const info = await vscode.workspace.fs.stat(chosen[0]);
-      if (info.size > 64 * 1024 * 1024) { throw new Error('导入 CSV 最大支持 64 MB。'); }
-      const table = parseCsv(Buffer.from(await vscode.workspace.fs.readFile(chosen[0])).toString('utf8'));
-      const timeColumn = defaultTimeColumn(table.headers);
-      const scale = timeScale(table.headers[timeColumn]);
-      const columns = table.headers.map((_, index) => index).filter(index => index !== timeColumn && !['timestamp_ns', 'stream_epoch'].includes(table.headers[index]) && table.rows.some(row => row[index] !== null));
-      if (!columns.length) { throw new Error('CSV 没有可绘制的数值列。'); }
-      // Validate before replacing the existing chart.
-      const initialCurves = csvCurves(table, timeColumn, scale, columns.slice(0, 8));
-      const elapsedSeconds = initialCurves[0]?.points.at(-1)?.[0] ?? 0;
-      this.lastStats = { rows: table.rows.length, actualHz: elapsedSeconds > 0 ? (table.rows.length - 1) / elapsedSeconds : 0, elapsedSeconds, dropped: 0 };
-      this.imported = table; this.timeColumn = timeColumn; this.scale = scale; this.columns = columns.slice(0, 8); this.file = chosen[0];
-      this.status = `已导入 ${table.rows.length.toLocaleString()} 行；选择时间列、单位和曲线，可缩放查看局部。`;
-      this.error = false; this.post({ type: 'clear' }); this.snapshot(); this.sendImported();
-    } finally { this.busy = false; this.snapshot(); }
-  }
-  private sendImported(): void {
-    if (this.imported) { this.post({ type: 'curves', live: false, curves: csvCurves(this.imported, this.timeColumn, this.scale, this.columns) }); }
-  }
+}
+
+function validateRecordingRate(rate: number): void {
+  if (!Number.isInteger(rate) || rate < 1 || rate > 100_000) throw new Error('采样频率必须是 1–100000 之间的整数。');
 }
 
 function variableLocation(variable: VariableDescriptor): string {
@@ -280,10 +217,10 @@ export function recorderHtml(webview: vscode.Webview, media: vscode.Uri): string
   const style = webview.asWebviewUri(vscode.Uri.joinPath(media, 'recorder.css'));
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${style}"></head><body>
   <header><div><span class="eyebrow">CORTEX KIT</span><h1>采样记录 / CSV 曲线</h1></div><div class="window-actions"><span id="connection" class="badge">未连接</span></div></header>
-  <section class="controls" aria-label="采样设置"><button id="select">选择变量 <span id="selected-count">0</span></button><label>采样频率 <div><input id="rate" type="number" min="1" max="100000" step="1" value="1000"><span>S/s</span></div></label><span>持续记录 · 手动停止</span><button id="start" class="primary">● 开始记录</button><button id="stop" disabled>■ 停止并保存</button><button id="import">导入 CSV</button></section>
+  <section class="controls" aria-label="采样设置"><button id="select">选择变量 <span id="selected-count">0</span></button><label>采样频率 <div><input id="rate" type="number" min="1" max="100000" step="1" value="1000"><span>S/s</span></div></label><span>持续记录 · 手动停止</span><button id="start" class="primary">● 开始记录</button><button id="stop" disabled>■ 停止并保存</button></section>
   <div id="selected" class="selected" title="采样变量">尚未选择采样变量</div>
   <section class="stats"><div><small>实际记录频率</small><strong id="actual">—</strong></div><div><small>已记录样本 / 行</small><strong id="rows">0</strong></div><div><small>采样时间跨度</small><strong id="elapsed">0.000 s</strong></div><div><small>通道丢帧</small><strong id="dropped">0</strong></div></section>
-  <div class="file-row"><span id="file">尚未选择文件</span><button id="reveal" disabled>打开所在文件夹</button></div><p id="status" role="status">选择变量后开始记录，或导入 CSV 离线查看曲线。</p>
-  <section class="plot"><div class="plot-toolbar"><h2 id="plot-title">时间序列</h2><div id="csv-controls" hidden><label>时间列 <select id="time-column"></select></label><label>单位 <select id="unit"><option value="1">s</option><option value="0.001">ms</option><option value="0.000001">µs</option><option value="0.000000001">ns</option></select></label><button id="columns">选择曲线</button></div><button id="fit">显示全部</button><label><input type="checkbox" id="follow" checked>跟随最新</label></div><div id="column-picker" hidden></div><div id="legend"></div><div class="canvas-wrap"><canvas id="chart" aria-label="变量随时间变化曲线"></canvas><div id="empty">导入 CSV 或开始记录后，在这里查看曲线。<br><small>滚轮缩放 · 拖动平移 · 悬停读取数值</small></div><div id="tooltip" hidden></div></div><footer><span id="range">时间 / s</span><span>预览按像素抽稀保留峰值；CSV 保存记录的全部样本。</span></footer></section>
+  <div class="file-row"><span id="file">尚未选择文件</span><button id="reveal" disabled>打开所在文件夹</button></div><p id="status" role="status">选择变量后开始记录；采样、抽样和 CSV 写入全部由 Rust 完成。</p>
+  <section class="plot"><div class="plot-toolbar"><h2 id="plot-title">Rust 实时预览</h2><button id="fit">显示全部</button><label><input type="checkbox" id="follow" checked>跟随最新</label></div><div id="legend"></div><div class="canvas-wrap"><canvas id="chart" aria-label="变量随时间变化曲线"></canvas><div id="empty">开始记录后，在这里查看 Rust 生成的预览。<br><small>滚轮缩放 · 拖动平移 · 悬停读取数值</small></div><div id="tooltip" hidden></div></div><footer><span id="range">时间 / s</span><span>Rust 预览按像素抽稀保留峰值；CSV 保存记录的全部样本。</span></footer></section>
   <script nonce="${nonce}" src="${script}"></script></body></html>`;
 }

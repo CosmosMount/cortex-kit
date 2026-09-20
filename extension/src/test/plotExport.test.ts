@@ -23,11 +23,9 @@ function setup() {
   });
   const provider = new exports.PlotViewProvider({ workspaceState: { get: (key: string, fallback: unknown) => key === 'cortexKit.plots' ? layouts : fallback, update: async () => {} } });
   provider.activeSession = { id: 'live' };
-  provider.plotSubscriptionIds = new Set(['a', 'b']);
-  const batch = { sessionId: 'live', programGeneration: 1, streamEpoch: 1, batchSequence: 1, channelIds: ['a', 'b'], sampleCount: 2, startTimestampNs: 1e9, samplePeriodNs: 1e9, values: [1, 2, 3, 4], droppedFrames: 0 };
-  provider.acceptBatch(batch); // Capture while the webview does not exist.
+  provider.native.historyValid = true;
   provider.view = { visible: true, webview: { postMessage: (message: any) => messages.push(message) } };
-  return { provider, messages, writes, batch, cancel: () => { cancel = true; }, choose: (selection: (items: any[]) => any[]) => { pick = selection; } };
+  return { provider, messages, writes, cancel: () => { cancel = true; }, choose: (selection: (items: any[]) => any[]) => { pick = selection; } };
 }
 
 test('adding an object to Plot asks for concrete members and adds only the checked leaves', async () => {
@@ -44,17 +42,14 @@ test('adding an object to Plot asks for concrete members and adds only the check
   } finally { provider.dispose(); }
 });
 
-test('Plot history survives session end and view recreation, but clears for a new session', () => {
+test('Rust Plot history survives session end but is invalidated for a new session', () => {
   const { provider, messages } = setup();
   try {
     provider.setSession(undefined);
-    assert.equal(provider.history.length, 1);
+    assert.equal(provider.native.hasHistory, true);
     assert.ok(!messages.some(message => message.type === 'clearHistory'));
-    provider.replayHistory();
-    assert.equal(messages.at(-2).type, 'clearHistory');
-    assert.equal(messages.at(-1).batch.values.length, 4);
     provider.setSession({ id: 'next' });
-    assert.equal(provider.history.length, 0);
+    assert.equal(provider.native.hasHistory, false);
     assert.equal(messages.at(-1).type, 'clearHistory');
   } finally { provider.dispose(); }
 });

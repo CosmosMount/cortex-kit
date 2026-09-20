@@ -1,5 +1,5 @@
-import { evaluateExpression, expressionDependencies } from './expression';
-import { ChartLayout, SampleBatch, VariableDescriptor } from './types';
+import { expressionDependencies } from './expression';
+import { ChartLayout, VariableDescriptor } from './types';
 
 export function flattenVariables(values: VariableDescriptor[]): VariableDescriptor[] {
   return values.flatMap(value => [value, ...flattenVariables(value.children)]);
@@ -95,31 +95,4 @@ export function resolveSubscriptionIds(layouts: ChartLayout[], catalog: Variable
     }
   }
   return resolved;
-}
-
-export function appendDerivedChannels(batch: SampleBatch, layouts: ChartLayout[], catalog: VariableDescriptor[]): SampleBatch {
-  const desiredIds = new Set(layouts.flatMap(chart => chart.variableIds));
-  const expressions = catalog.filter(item => item.id.startsWith('expr:') && desiredIds.has(item.id));
-  if (!expressions.length) { return batch; }
-  const descriptors = new Map(catalog.map(item => [item.id, item]));
-  const rawDescriptors = batch.channelIds.map(id => descriptors.get(id));
-  const channelIds = [...batch.channelIds, ...expressions.map(item => item.id)];
-  const values: number[] = [];
-  for (let sample = 0; sample < batch.sampleCount; sample += 1) {
-    const environment = new Map<string, number>();
-    for (let channel = 0; channel < batch.channelIds.length; channel += 1) {
-      const value = batch.values[sample * batch.channelIds.length + channel];
-      const descriptor = rawDescriptors[channel];
-      if (descriptor) {
-        environment.set(descriptor.expression, value);
-        environment.set(descriptor.name, value);
-      }
-      values.push(value);
-    }
-    for (const expression of expressions) {
-      try { values.push(evaluateExpression(expression.expression, environment)); }
-      catch { values.push(Number.NaN); }
-    }
-  }
-  return { ...batch, channelIds, values };
 }

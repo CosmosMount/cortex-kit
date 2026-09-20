@@ -56,6 +56,6 @@ export function convertCortexDebugConfiguration(sourceValue: unknown, chipOverri
     ...(typeof source.svdFile === 'string' ? { svdFile: source.svdFile } : { svdFile: null }),
     probe: { selector: 'auto', protocol: 'swd', speedKHz: speed, connectUnderReset: false },
     flashing: { enabled: request === 'launch' && Boolean(executable), verify: true, resetAfter: true },
-    acquisition: { requestedSamplesPerSecond: 5000, maxBurstMs: 2, historySeconds: 30 },
+    acquisition: { requestedSamplesPerSecond: 5000, historySeconds: 30 },
   };
 }

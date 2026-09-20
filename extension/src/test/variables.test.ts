@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { expandVariableSelections } from '../plotModel';
-import { evaluateExpression, expressionDependencies } from '../expression';
+import { expressionDependencies } from '../expression';
 import { VariableDescriptor } from '../types';
 
 test('scoped instance fields and array members work in plot expressions', () => {
   const name = 'Motor::Instance::instance.samples[0].value';
   assert.deepEqual(expressionDependencies(`${name} * 2`), [name]);
-  assert.equal(evaluateExpression(`${name} * 2`, new Map([[name, 3]])), 6);
 });
 
 test('same-named instances keep distinct tree identities across value refresh and select their own fields', () => {

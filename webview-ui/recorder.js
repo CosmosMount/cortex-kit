@@ -3,20 +3,16 @@
   const el = id => document.getElementById(id);
   const colors = ['#50b9ef', '#eeac64', '#9dd787', '#d392ed', '#ed7c8a', '#61d1bc', '#b8b9ff', '#d8cb75'];
   const canvas = el('chart'), ctx = canvas.getContext('2d');
-  let state = {}, curves = [], hidden = new Set(), range, fullRange, cursor, dragging, live = false, scheduled = false, requestTimer;
-  let signature = '', importSignature = '', settingsInitialized = false;
+  let state = {}, curves = [], hidden = new Set(), range, fullRange, cursor, dragging, live = false, scheduled = false;
+  let signature = '', settingsInitialized = false;
   const padding = { left: 76, right: 24, top: 24, bottom: 42 };
   const send = (type, data = {}) => vscode.postMessage({ type, ...data });
   el('select').onclick = () => send('select');
   el('start').onclick = () => send('start', { rate: Number(el('rate').value) });
   el('stop').onclick = () => send('stop');
-  el('import').onclick = () => send('import');
   el('reveal').onclick = () => send('reveal');
-  el('fit').onclick = () => { range = fullRange?.slice(); el('follow').checked = true; if (state.imported) { requestView(false); } drawSoon(); };
+  el('fit').onclick = () => { range = fullRange?.slice(); el('follow').checked = true; drawSoon(); };
   el('follow').onchange = () => { if (el('follow').checked) { range = fullRange?.slice(); drawSoon(); } };
-  el('columns').onclick = () => { el('column-picker').hidden = !el('column-picker').hidden; };
-  el('time-column').onchange = () => { el('follow').checked = true; requestView(false); };
-  el('unit').onchange = () => { el('follow').checked = true; requestView(false); };
 
   window.addEventListener('message', ({ data }) => {
     if (data.type === 'state') { state = data; updateState(); }
@@ -30,51 +26,28 @@
       }
       const nextSignature = curves.map(curve => curve.name).join('\u0000');
       if (signature !== nextSignature) { signature = nextSignature; buildLegend(); }
-      el('plot-title').textContent = live ? '实时预览 · 最近 4000 个样本' : 'CSV 时间序列';
+      el('plot-title').textContent = 'Rust 实时预览 · 最近 4000 个样本';
       drawSoon();
     }
   });
   function updateState() {
     const locked = state.recording || state.busy;
-    for (const id of ['select', 'start', 'import', 'rate']) { el(id).disabled = locked; }
+    for (const id of ['select', 'start', 'rate']) { el(id).disabled = locked; }
     el('stop').disabled = !state.recording;
     el('reveal').disabled = !state.file;
-    el('connection').textContent = state.recording ? '● 正在记录' : state.connected ? '目标已连接' : '离线 · 可导入 CSV';
+    el('connection').textContent = state.recording ? '● 正在记录' : state.connected ? '目标已连接' : '离线';
     el('connection').classList.toggle('connected', !!state.connected);
     el('selected-count').textContent = state.selected?.length ?? 0;
     el('selected').textContent = state.selected?.length ? state.selected.join('  ·  ') : '尚未选择采样变量';
     el('selected').title = state.selected?.join('\n') ?? '';
     if (!settingsInitialized || state.recording) { el('rate').value = state.requestedHz; settingsInitialized = true; }
     el('actual').textContent = state.actualHz ? `${state.actualHz.toFixed(1)} S/s` : '—';
-    el('rows').textContent = (state.imported?.rows ?? state.rows ?? 0).toLocaleString();
+    el('rows').textContent = (state.rows ?? 0).toLocaleString();
     el('elapsed').textContent = `${(state.elapsedSeconds ?? 0).toFixed(3)} s`;
     el('dropped').textContent = (state.dropped ?? 0).toLocaleString();
     el('file').textContent = state.file || '尚未选择文件';
     el('status').textContent = state.status;
     el('status').classList.toggle('error', !!state.error);
-    el('csv-controls').hidden = !state.imported;
-    if (!state.imported) { el('column-picker').hidden = true; importSignature = ''; }
-    else {
-      const key = JSON.stringify([state.file, state.imported.headers]);
-      if (key !== importSignature) {
-        importSignature = key;
-        el('time-column').replaceChildren(...state.imported.headers.map((name, index) => {
-          const option = document.createElement('option'); option.textContent = name; option.value = index; return option;
-        }));
-        el('time-column').value = state.imported.timeColumn;
-        el('unit').value = String(state.imported.scale);
-        el('column-picker').replaceChildren(...state.imported.headers.map((name, index) => {
-          const label = document.createElement('label'), input = document.createElement('input');
-          input.type = 'checkbox'; input.value = index; input.checked = state.imported.columns.includes(index);
-          input.onchange = () => requestView(false); label.append(input, document.createTextNode(name)); return label;
-        }));
-      }
-    }
-  }
-  function requestView(zoom) {
-    clearTimeout(requestTimer);
-    requestTimer = setTimeout(() => send('view', { timeColumn: Number(el('time-column').value), scale: Number(el('unit').value),
-      columns: [...el('column-picker').querySelectorAll('input:checked')].map(input => Number(input.value)), ...(zoom ? { range } : {}) }), zoom ? 100 : 0);
   }
   function boundsOf(items) {
     let min = Infinity, max = -Infinity;
@@ -140,10 +113,10 @@
     if (!range) { return; } event.preventDefault();
     const center = pointerTime(event), factor = Math.exp(Math.max(-1, Math.min(1, event.deltaY * .002)));
     const left = center - (center - range[0]) * factor, right = center + (range[1] - center) * factor;
-    if (right - left > 1e-9) { range = [left, right]; el('follow').checked = false; if (state.imported) { requestView(true); } drawSoon(); }
+    if (right - left > 1e-9) { range = [left, right]; el('follow').checked = false; drawSoon(); }
   }, { passive: false });
   canvas.addEventListener('pointerdown', event => { if (range) { dragging = { x: event.clientX, range: range.slice() }; canvas.setPointerCapture(event.pointerId); el('follow').checked = false; } });
-  canvas.addEventListener('pointerup', () => { dragging = undefined; if (state.imported) { requestView(true); } });
+  canvas.addEventListener('pointerup', () => { dragging = undefined; });
   canvas.addEventListener('pointercancel', () => { dragging = undefined; });
   canvas.addEventListener('pointerleave', () => { if (!dragging) { cursor = undefined; el('tooltip').hidden = true; drawSoon(); } });
   canvas.addEventListener('pointermove', event => {

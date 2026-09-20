@@ -2,7 +2,20 @@
   const vscode = acquireVsCodeApi();
   const colors = ['#4fc1ff', '#f48771', '#b5cea8', '#c586c0', '#dcdcaa', '#9cdcfe', '#ce9178', '#569cd6'];
   let charts = []; let variables = new Map(); let session; let refreshRate = 30; let historySeconds = 30; let renderPending = false; let cursorTime; let arrangement = 'grid'; let draggedChartId;
-  const histories = new Map();
+  const nativeOptions = {
+    post: message => vscode.postMessage(message), redraw: () => scheduleDraw(), colors,
+    refreshRate: () => refreshRate, hidden: () => document.hidden,
+    metrics: message => { metrics.textContent = message; },
+    viewports: () => [...document.querySelectorAll('canvas[data-chart-id]')].flatMap(canvas => {
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return [];
+      return [{ id: canvas.dataset.chartId, columns: Math.max(1, Math.min(4096, Math.ceil((rect.width - 44) * (devicePixelRatio || 1)))) }];
+    }),
+  };
+  const NativePlot = globalThis.CortexKitNativePlot?.NativePlot;
+  if (!NativePlot) throw new Error('Rust Plot renderer is missing; rebuild the extension media');
+  const native = new NativePlot(nativeOptions);
+  native.setEnabled(true);
   const chartsRoot = document.getElementById('charts'); const connection = document.getElementById('connection'); const metrics = document.getElementById('metrics'); const arrangementSelect = document.getElementById('arrangement');
   document.getElementById('add-chart').addEventListener('click', () => vscode.postMessage({ type: 'addChart' }));
   document.getElementById('export-plots').addEventListener('click', () => vscode.postMessage({ type: 'exportPlots' }));
@@ -11,11 +24,15 @@
   historySelect.addEventListener('change', () => vscode.postMessage({ type: 'setHistorySeconds', seconds: historySelect.value === 'custom' ? 'custom' : Number(historySelect.value) }));
 
   window.addEventListener('message', ({ data }) => {
+    if (native.receive(data)) return;
+    if (data.type === 'nativeRefresh') native.invalidate();
+    if (data.type === 'historyWindow' && Number.isFinite(data.refreshRate)) refreshRate = data.refreshRate;
+    if (['snapshot', 'layout', 'catalog', 'historyWindow'].includes(data.type)) native.invalidate();
     if (data.type === 'snapshot') { charts = data.charts; arrangement = data.arrangement || 'grid'; setVariables(data.variables); session = data.state; refreshRate = data.refreshRate || 30; setHistoryWindow(data.historySeconds); rebuild(); updateHeader(); }
     if (data.type === 'historyWindow') { setHistoryWindow(data.historySeconds); }
     if (data.type === 'renderExport') {
-      try { vscode.postMessage({ type: 'exportImage', requestId: data.requestId, dataUrl: exportPlots(data.chartIds) }); }
-      catch (error) { vscode.postMessage({ type: 'exportImage', requestId: data.requestId, error: String(error) }); }
+      void native.export(data.chartIds, () => exportPlots(data.chartIds)).then(dataUrl => vscode.postMessage({ type: 'exportImage', requestId: data.requestId, dataUrl }),
+        error => vscode.postMessage({ type: 'exportImage', requestId: data.requestId, error: String(error) }));
     }
     if (data.type === 'clearHistory') { clearHistory(); }
     if (data.type === 'layout') { charts = data.charts; arrangement = data.arrangement || arrangement; rebuild(); }
@@ -26,10 +43,10 @@
       }
       session = data.state; updateHeader();
     }
-    if (data.type === 'samples') { append(data.batch); scheduleDraw(); }
     if (data.type === 'streamError') { metrics.textContent = data.message; }
   });
-  window.addEventListener('resize', scheduleDraw);
+  window.addEventListener('resize', () => { native.invalidate(); scheduleDraw(); });
+  document.addEventListener?.('visibilitychange', () => { if (!document.hidden) { native.invalidate(); scheduleDraw(); } });
 
   function setVariables(items) { variables = new Map((items || []).map(item => [item.id, item])); }
   function setHistoryWindow(seconds) {
@@ -38,16 +55,10 @@
     const preset = [5, 10, 30, 60, 120, 300, 600].includes(seconds);
     historySelect.querySelector('option[value="custom"]').textContent = preset ? '自定义…' : `自定义：${seconds} 秒`;
     historySelect.value = preset ? String(seconds) : 'custom';
-    for (const history of histories.values()) { trimHistory(history); }
     cursorTime = undefined;
     scheduleDraw();
   }
-  function trimHistory(history) {
-    const cutoff = history.length ? history[history.length - 1].t - historySeconds : 0;
-    let first = 0; while (first < history.length && history[first].t < cutoff) { first++; }
-    if (first) { history.splice(0, first); }
-  }
-  function clearHistory() { histories.clear(); cursorTime = undefined; scheduleDraw(); }
+  function clearHistory() { native.clear(); cursorTime = undefined; scheduleDraw(); }
   function updateHeader() {
     if (!session) { connection.textContent = 'No session'; return; }
     const target = typeof session.targetState === 'string' ? session.targetState : `halted · ${session.targetState.halted.reason}`;
@@ -76,35 +87,47 @@
     toolbar.append(drag, title, mode, add, expression, remove);
     const legend = element('div', 'legend');
     chart.variableIds.forEach((id, index) => { const variable = variables.get(id); const chip = element('span', 'chip'); const swatch = element('span', 'swatch'); swatch.style.background = colors[index % colors.length]; const label = document.createTextNode(variable?.name || id); const close = button('×', () => vscode.postMessage({ type: 'removeVariable', chartId: chart.id, variableId: id })); chip.append(swatch, label, close); legend.append(chip); });
-    const wrap = element('div', 'canvas-wrap'); const canvas = document.createElement('canvas'); canvas.dataset.chartId = chart.id; canvas.addEventListener('mousemove', event => { const rect = canvas.getBoundingClientRect(); const newest = newestTime(chart.variableIds); cursorTime = newest - historySeconds + event.offsetX / rect.width * historySeconds; scheduleDraw(); }); canvas.addEventListener('mouseleave', () => { cursorTime = undefined; scheduleDraw(); });
+    const wrap = element('div', 'canvas-wrap'); const canvas = document.createElement('canvas'); canvas.dataset.chartId = chart.id; canvas.addEventListener('mousemove', event => { const rect = canvas.getBoundingClientRect(); const newest = newestTime(chart.variableIds); cursorTime = newest - historySeconds + Math.max(0, Math.min(1, (event.offsetX - 36) / Math.max(1, rect.width - 44))) * historySeconds; scheduleDraw(); }); canvas.addEventListener('mouseleave', () => { cursorTime = undefined; scheduleDraw(); });
     wrap.append(canvas); if (!chart.variableIds.length) { const empty = element('div', 'empty'); empty.textContent = 'Use “＋ Variable” to add one or more signals'; wrap.append(empty); }
     root.append(toolbar, legend, wrap); return root;
   }
   function clearDropMarkers() { document.querySelectorAll('.chart.drop-before,.chart.drop-after').forEach(node => node.classList.remove('drop-before', 'drop-after')); }
   function dropAfter(event, target) { const rect = target.getBoundingClientRect(); if (arrangement === 'row') return event.clientX >= rect.left + rect.width / 2; if (arrangement === 'column') return event.clientY >= rect.top + rect.height / 2; const verticalOffset = event.clientY - rect.top; return verticalOffset > rect.height * .65 || (verticalOffset >= rect.height * .35 && event.clientX >= rect.left + rect.width / 2); }
-  function append(batch) {
-    const width = batch.channelIds.length;
-    for (let channel = 0; channel < width; channel += 1) {
-      const id = batch.channelIds[channel]; const history = histories.get(id) || [];
-      for (let sample = 0; sample < batch.sampleCount; sample += 1) { history.push({ t: (batch.startTimestampNs + sample * batch.samplePeriodNs) / 1e9, v: batch.values[sample * width + channel], epoch: batch.streamEpoch }); }
-      trimHistory(history);
-      histories.set(id, history);
-    }
-    const actual = batch.samplePeriodNs ? 1e9 / batch.samplePeriodNs : 0; metrics.textContent = `${actual.toFixed(1)} S/s · ${batch.channelIds.length} variables · dropped ${batch.droppedFrames}`;
+  let lastNativeDraw = -Infinity;
+  function scheduleDraw() {
+    if (renderPending || document.hidden) return;
+    renderPending = true;
+    const draw = now => {
+      if (document.hidden) { renderPending = false; return; }
+      if (now - lastNativeDraw < 1000 / Math.max(1, Math.min(60, refreshRate)) - .5) { requestAnimationFrame(draw); return; }
+      renderPending = false; lastNativeDraw = now; drawAll();
+    };
+    requestAnimationFrame(draw);
   }
-  function scheduleDraw() { if (renderPending) return; renderPending = true; setTimeout(() => requestAnimationFrame(() => { renderPending = false; drawAll(); }), 1000 / refreshRate); }
-  function drawAll() { document.querySelectorAll('canvas[data-chart-id]').forEach(canvas => { const chart = charts.find(item => item.id === canvas.dataset.chartId); if (chart) drawChart(canvas, chart); }); }
+  function drawAll() {
+    const byId = new Map(charts.map(chart => [chart.id, chart]));
+    document.querySelectorAll('canvas[data-chart-id]').forEach(canvas => {
+      const chart = byId.get(canvas.dataset.chartId), rect = canvas.getBoundingClientRect();
+      if (chart && rect.width && rect.height && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth) drawChart(canvas, chart);
+    });
+  }
   function drawChart(canvas, chart) {
-    const rect = canvas.getBoundingClientRect(); const ratio = devicePixelRatio || 1; canvas.width = Math.max(1, Math.floor(rect.width * ratio)); canvas.height = Math.max(1, Math.floor(rect.height * ratio)); const ctx = canvas.getContext('2d'); ctx.scale(ratio, ratio); const width = rect.width; const height = rect.height;
-    const style = getComputedStyle(document.body); const grid = style.getPropertyValue('--vscode-editorWidget-border') || '#5558'; const text = style.getPropertyValue('--vscode-descriptionForeground') || '#aaa'; ctx.font = '11px ' + style.fontFamily;
-    const timeHeight = chart.mode === 'both' ? height * .52 : height; const fftTop = chart.mode === 'both' ? timeHeight : 0;
+    const rect = canvas.getBoundingClientRect(), ratio = devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor(rect.width * ratio)), h = Math.max(1, Math.floor(rect.height * ratio));
+    if (canvas.width !== w) canvas.width = w; if (canvas.height !== h) canvas.height = h;
+    const ctx = canvas.getContext('2d'); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, w, h); ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const width = rect.width, height = rect.height;
+    const style = getComputedStyle(document.body), grid = style.getPropertyValue('--vscode-editorWidget-border') || '#5558', text = style.getPropertyValue('--vscode-descriptionForeground') || '#aaa';
+    ctx.font = '11px ' + style.fontFamily;
+    const timeHeight = chart.mode === 'both' ? height * .52 : height, fftTop = chart.mode === 'both' ? timeHeight : 0;
+    if (width <= 44 || height <= 28) return;
     if (chart.mode !== 'fft') drawTime(ctx, chart, 36, 8, width - 44, timeHeight - 28, grid, text);
     if (chart.mode !== 'time') drawFft(ctx, chart, 36, fftTop + 8, width - 44, height - fftTop - 28, grid, text);
   }
   function exportPlots(ids) {
     const selected = charts.filter(chart => ids.includes(chart.id));
     if (!selected.length) { throw new Error('没有选中图表。'); }
-    if (selected.some(chart => !chart.variableIds.some(id => histories.get(id)?.length))) { throw new Error('所选图表的数据已清空，请重新采样后导出。'); }
+    if (selected.some(chart => !native.hasData(chart))) { throw new Error('所选图表的数据已清空，请重新采样后导出。'); }
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const width = 900, margin = 28, scale = 2;
@@ -162,50 +185,12 @@
     lines.push(line); return lines;
   }
   function drawTime(ctx, chart, x, y, width, height, grid, text, relative = false) {
-    axes(ctx, x, y, width, height, grid); const newest = newestTime(chart.variableIds); const start = newest - historySeconds; let all = [];
-    chart.variableIds.forEach(id => { all = all.concat((histories.get(id) || []).filter(point => point.t >= start && point.t <= newest && Number.isFinite(point.v)).map(point => point.v)); });
-    if (!all.length) {
-      ctx.fillStyle = text; ctx.textAlign = 'center'; ctx.fillText(waitingMessage(), x + width / 2, y + height / 2); ctx.textAlign = 'start';
-      return;
-    }
-    const [min, max] = extent(all);
-    chart.variableIds.forEach((id, index) => drawEnvelope(ctx, histories.get(id) || [], start, newest, min, max, x, y, width, height, colors[index % colors.length]));
-    ctx.fillStyle = text; ctx.fillText(max.toPrecision(4), Math.max(2, x - 65), y + 10); ctx.fillText(min.toPrecision(4), Math.max(2, x - 65), y + height); ctx.fillText(`${relative ? '-' : ''}${historySeconds}s`, x, y + height + 16); ctx.fillText(relative ? '0 s' : 'now', x + width - 20, y + height + 16);
-    if (cursorTime !== undefined && cursorTime >= start && cursorTime <= newest) { const cursorX = x + (cursorTime - start) / historySeconds * width; ctx.strokeStyle = text; ctx.beginPath(); ctx.moveTo(cursorX, y); ctx.lineTo(cursorX, y + height); ctx.stroke(); }
-  }
-  function drawEnvelope(ctx, points, start, end, min, max, x, y, width, height, color) {
-    const bins = new Array(Math.max(1, Math.floor(width))); for (const point of points) { if (point.t < start || point.t > end || !Number.isFinite(point.v)) continue; const index = Math.min(bins.length - 1, Math.floor((point.t - start) / Math.max(Number.EPSILON, end - start) * bins.length)); const bin = bins[index]; bins[index] = bin && bin[2] === point.epoch ? [Math.min(bin[0], point.v), Math.max(bin[1], point.v), point.epoch] : [point.v, point.v, point.epoch]; }
-    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.beginPath(); let previousEpoch;
-    bins.forEach((bin, index) => {
-      if (!bin) { previousEpoch = undefined; return; }
-      if (previousEpoch !== undefined && previousEpoch !== bin[2]) { previousEpoch = undefined; }
-      const xx = x + index; const y1 = y + height - (bin[0] - min) / (max - min) * height; const y2 = y + height - (bin[1] - min) / (max - min) * height; const middle = (y1 + y2) / 2;
-      if (previousEpoch !== undefined) ctx.lineTo(xx, middle); else ctx.moveTo(xx, middle);
-      ctx.moveTo(xx, y1); ctx.lineTo(xx, y2); ctx.moveTo(xx, middle); ctx.fillRect(xx - 1, middle - 1, 2, 2); previousEpoch = bin[2];
-    });
-    ctx.stroke();
+    return native.time(ctx, chart, x, y, width, height, grid, text, relative, cursorTime);
   }
   function drawFft(ctx, chart, x, y, width, height, grid, text) {
-    axes(ctx, x, y, width, height, grid); let peak = 1;
-    const spectra = chart.variableIds.map((id, colorIndex) => { const result = spectrum(histories.get(id) || []); return result ? { ...result, colorIndex } : undefined; }).filter(Boolean); spectra.forEach(result => result.values.forEach(value => peak = Math.max(peak, value)));
-    if (!spectra.length) { ctx.fillStyle = text; ctx.textAlign = 'center'; ctx.fillText(waitingMessage(), x + width / 2, y + height / 2); ctx.textAlign = 'start'; return; }
-    spectra.forEach(result => { ctx.strokeStyle = colors[result.colorIndex % colors.length]; ctx.beginPath(); result.values.forEach((value, bin) => { const xx = x + bin / Math.max(1, result.values.length - 1) * width; const yy = y + height - value / peak * height; if (!bin) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy); }); ctx.stroke(); });
-    const maxHz = spectra[0]?.maxHz || 0; ctx.fillStyle = text; ctx.fillText('FFT', Math.max(2, x - 65), y + 10); ctx.fillText('0 Hz', x, y + height + 16); ctx.fillText(`${maxHz.toFixed(0)} Hz`, x + width - 42, y + height + 16);
+    return native.fft(ctx, chart, x, y, width, height, grid, text);
   }
-  function spectrum(points) {
-    const epoch = points.at(-1)?.epoch; const source = points.filter(point => point.epoch === epoch && Number.isFinite(point.v)).slice(-65536); let n = 1; while (n * 2 <= source.length && n < 65536) n *= 2; if (n < 16) return undefined; const selected = source.slice(-n); const input = selected.map(point => point.v); const output = fftMagnitudes(input); const period=(selected[selected.length-1].t-selected[0].t)/(n-1); return period > 0 ? { values: output, maxHz: 1/(2*period) } : undefined;
-  }
-  function fftMagnitudes(input) {
-    const n=input.length, real=new Float64Array(n), imag=new Float64Array(n); const mean=input.reduce((a,b)=>a+b,0)/n; let windowSum=0;
-    for(let i=0;i<n;i+=1){const weight=.5-.5*Math.cos(2*Math.PI*i/(n-1));real[i]=(input[i]-mean)*weight;windowSum+=weight;}
-    for(let i=1,j=0;i<n;i+=1){let bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j){[real[i],real[j]]=[real[j],real[i]];[imag[i],imag[j]]=[imag[j],imag[i]];}}
-    for(let width=2;width<=n;width*=2){const angle=-2*Math.PI/width;for(let start=0;start<n;start+=width){for(let offset=0;offset<width/2;offset+=1){const phase=angle*offset,wr=Math.cos(phase),wi=Math.sin(phase),right=start+offset+width/2,left=start+offset;const tr=real[right]*wr-imag[right]*wi,ti=real[right]*wi+imag[right]*wr,lr=real[left],li=imag[left];real[left]=lr+tr;imag[left]=li+ti;real[right]=lr-tr;imag[right]=li-ti;}}}
-    return Array.from({length:n/2},(_,index)=>Math.hypot(real[index],imag[index])*(index===0?1:2)/windowSum);
-  }
-  function axes(ctx, x, y, width, height, color) { ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.beginPath(); for (let i=0;i<=4;i+=1) { const yy=y+i/4*height; ctx.moveTo(x,yy); ctx.lineTo(x+width,yy); } ctx.stroke(); }
-  function extent(values) { if (!values.length) return [-1,1]; let min=Infinity, max=-Infinity; for (const value of values) { if (value < min) min = value; if (value > max) max = value; } if (min===max) { const delta=Math.max(1,Math.abs(min)*.05); min-=delta; max+=delta; } const pad=(max-min)*.06; return [min-pad,max+pad]; }
-  function waitingMessage() { const state=session?.targetState; const halted=typeof state==='object' && state?.halted; return halted ? 'Target halted — press Continue to start sampling' : 'Waiting for samples…'; }
-  function newestTime(ids) { return ids.reduce((latest,id) => Math.max(latest, histories.get(id)?.at(-1)?.t || 0), 0); }
+  function newestTime(ids) { return native.newest(ids); }
   function element(tag, className) { const node=document.createElement(tag); if(className) node.className=className; return node; }
   function button(label, action, className='') { const node=element('button',className); node.textContent=label; node.addEventListener('click',action); return node; }
   vscode.postMessage({ type: 'ready' });

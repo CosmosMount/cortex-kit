@@ -1,38 +1,71 @@
-import * as net from 'node:net';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { BatchDecoder } from './binaryProtocol';
+import { NativeController } from './nativeController';
+import { NativeRecordSpec, NativeRecordStatus, NativePreview } from './nativeData';
 import { expressionDependencies } from './expression';
-import { latestLiveWatchValues, splitSubscriptions, selectBatchChannels } from './liveWatchModel';
-import { appendDerivedChannels, expandVariableSelections, expressionDescriptor, flattenVariables, isPlottableVariable, reorderCharts, resolveSubscriptionIds, restoreLayoutExpressions } from './plotModel';
-import { ChartArrangement, ChartLayout, LiveWatchValue, SampleBatch, SessionState, VariableDescriptor } from './types';
+import { splitSubscriptions } from './liveWatchModel';
+import { expandVariableSelections, expressionDescriptor, flattenVariables, isPlottableVariable, reorderCharts, resolveSubscriptionIds, restoreLayoutExpressions } from './plotModel';
+import { ChartArrangement, ChartLayout, LiveWatchValue, SessionState, VariableDescriptor } from './types';
 
 interface DataChannelInfo { port: number; token: string; protocolVersion: number; }
 
 export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+  private readonly native: NativeController;
+  private nativeRenderBusy = false;
+  private nativeError(error: Error): void {
+    this.post({ type: 'streamError', message: `Native data: ${error.message}` });
+    this.streamError.fire(error.message);
+  }
+  private configureNative(): void {
+    const rawIds = resolveSubscriptionIds(this.layouts, this.catalog);
+    const wanted = new Set([...rawIds, ...this.layouts.flatMap(chart => chart.variableIds)]);
+    // Do not serialize a full DWARF catalog on every configuration change.
+    const catalog = this.catalog.filter(item => wanted.has(item.id)).map(({ id, name, expression }) => ({ id, name, expression }));
+    this.native.update({ historySeconds: this.historySeconds(), charts: this.layouts.map(({ id, mode, variableIds }) => ({ id, mode, variableIds })), catalog, rawIds },
+      this.liveWatchIds, vscode.workspace.getConfiguration('cortexKit').get('liveWatchRefreshRate', 10));
+  }
+  private async renderNative(message: Record<string, unknown>): Promise<void> {
+    const requestId = message.requestId;
+    if (typeof requestId !== 'string' || requestId.length > 128) return;
+    if (this.nativeRenderBusy) { this.post({ type: 'nativeFrame', requestId, error: 'Native display busy' }); return; }
+    const viewports = message.viewports;
+    if (!Array.isArray(viewports) || viewports.length > 32 || viewports.some(v => !v || typeof v.id !== 'string' || v.id.length > 4096 || !Number.isInteger(v.columns) || v.columns < 1 || v.columns > 4096)) {
+      this.post({ type: 'nativeFrame', requestId, error: 'Invalid native viewport request' }); return;
+    }
+    this.nativeRenderBusy = true; const view = this.view;
+    try {
+      const frame = await this.native.render(viewports);
+      if (this.state && frame.sessionId && (frame.sessionId !== this.state.sessionId || frame.programGeneration !== this.state.programGeneration)) throw new Error('Waiting for the current target generation');
+      if (this.view === view) this.post({ type: 'nativeFrame', requestId, frame });
+    }
+    catch (error) { if (this.view === view) this.post({ type: 'nativeFrame', requestId, error: String(error) }); }
+    finally { this.nativeRenderBusy = false; }
+  }
+  async startNativeRecording(spec: NativeRecordSpec): Promise<void> {
+    await this.native.startRecording(spec);
+  }
+  async stopNativeRecording(): Promise<NativeRecordStatus> {
+    return this.native.stopRecording();
+  }
+  async nativeRecordingStatus(): Promise<NativeRecordStatus> {
+    return this.native.recordingStatus();
+  }
+  async nativeRecordingPreview(): Promise<NativePreview | undefined> { return this.native.preview(); }
   private view?: vscode.WebviewView;
-  private socket?: net.Socket;
   private dataChannel?: DataChannelInfo;
-  private reconnectTimer?: NodeJS.Timeout;
-  private socketGeneration = 0;
   private layouts: ChartLayout[];
   private arrangement: ChartArrangement;
   private catalog: VariableDescriptor[];
   private state?: SessionState;
   private activeSession?: vscode.DebugSession;
   private liveWatchIds: string[] = [];
-  private plotSubscriptionIds = new Set<string>();
   private readonly liveWatchValues = new vscode.EventEmitter<LiveWatchValue[]>();
   readonly onDidReceiveLiveWatchValues = this.liveWatchValues.event;
-  private pendingLiveWatchValues = new Map<string, LiveWatchValue>();
-  private liveWatchTimer?: NodeJS.Timeout;
   private lastSubscriptionKey?: string;
   private recording?: { ids: string[]; rate: number };
-  private history: SampleBatch[] = [];
-  private historyValues = 0;
   private exporting = false;
   private exportRequest?: { id: string; timer: NodeJS.Timeout };
-  private readonly samples = new vscode.EventEmitter<SampleBatch>();
-  readonly onDidReceiveSamples = this.samples.event;
   private readonly sessionChanged = new vscode.EventEmitter<vscode.DebugSession | undefined>();
   readonly onDidChangeSession = this.sessionChanged.event;
   private readonly dataReady = new vscode.EventEmitter<void>();
@@ -56,13 +89,24 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.layouts = context.workspaceState.get<ChartLayout[]>('cortexKit.plots', [{ id: 'chart-1', title: 'Plot 1', mode: 'time', variableIds: [] }]);
     this.arrangement = context.workspaceState.get<ChartArrangement>('cortexKit.plotArrangement', 'grid');
     this.catalog = restoreLayoutExpressions(this.layouts);
+    this.native = new NativeController(nativeBackendPath(context), latest => {
+        // Already a latest-value snapshot at the configured display rate: do
+        // not add a second timer and never enqueue Plot/CSV data ahead of it.
+        if (this.state && (latest.sessionId !== this.state.sessionId || latest.programGeneration !== this.state.programGeneration)) return;
+        const values: LiveWatchValue[] = latest.values.filter(item => !this.state || item.streamEpoch === this.state.streamEpoch).map(item => {
+          const timestampNs = Number(item.timestampNsExact);
+          return { id: item.id, value: item.value ?? Number.NaN, source: 'stream' as const, actualSamplesPerSecond: item.actualSamplesPerSecond,
+            ...(Number.isSafeInteger(timestampNs) ? { timestampNs } : {}) };
+        });
+        if (values.length) this.liveWatchValues.fire(values);
+    }, error => this.nativeError(error));
+    this.configureNative();
   }
   dispose(): void {
+    void this.native.dispose();
     if (this.exportRequest) { clearTimeout(this.exportRequest.timer); }
     this.closeDataChannel(true);
-    if (this.liveWatchTimer) { clearTimeout(this.liveWatchTimer); }
     this.liveWatchValues.dispose();
-    this.samples.dispose();
     this.sessionChanged.dispose();
     this.dataReady.dispose();
     this.streamError.dispose();
@@ -71,7 +115,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const changed = this.activeSession?.id !== session?.id;
     if (changed) { this.closeDataChannel(true); }
     this.activeSession = session;
-    if (changed) { if (session) { this.clearHistory(); } this.pendingLiveWatchValues.clear(); this.lastSubscriptionKey = undefined; }
+    if (changed) { if (session) { this.clearHistory(); } this.lastSubscriptionKey = undefined; }
     if (!session) {
       this.state = undefined;
       this.post({ type: 'session', state: undefined });
@@ -87,7 +131,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const seconds = vscode.workspace.getConfiguration('cortexKit', folder?.uri).get<number>('historySeconds', 30);
     return Number.isFinite(seconds) && seconds >= 1 && seconds <= 600 ? seconds : 30;
   }
-  refreshSettings(): void { this.trimHistory(); this.post({ type: 'historyWindow', historySeconds: this.historySeconds() }); }
+  refreshSettings(): void { this.configureNative(); this.post({ type: 'historyWindow', historySeconds: this.historySeconds(), refreshRate: vscode.workspace.getConfiguration('cortexKit').get('chartRefreshRate', 30) }); }
   setState(state: SessionState): void {
     if (state.lastError && state.lastError !== this.state?.lastError) { this.streamError.fire(state.lastError); }
     this.state = state; this.post({ type: 'session', state });
@@ -98,27 +142,12 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.dataReady.fire();
   }
   private openDataChannel(): void {
-    const info = this.dataChannel;
-    if (!info || !this.activeSession) { return; }
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined; }
-    const generation = ++this.socketGeneration;
-    this.socket?.destroy();
-    const decoder = new BatchDecoder();
-    const socket = net.createConnection({ host: '127.0.0.1', port: info.port }, () => socket.write(`${info.token}\n`));
-    this.socket = socket;
-    socket.on('data', chunk => { try { for (const batch of decoder.push(chunk)) { this.acceptBatch(batch); } } catch (error) { this.streamError.fire(String(error)); void vscode.window.showErrorMessage(`Cortex Kit sample stream error: ${String(error)}`); } });
-    socket.on('error', error => { this.streamError.fire(error.message); this.post({ type: 'streamError', message: error.message }); });
-    socket.on('close', () => {
-      if (generation !== this.socketGeneration || !this.activeSession || !this.dataChannel) { return; }
-      this.streamError.fire('采样通道断开，正在重新连接。');
-      this.reconnectTimer = setTimeout(() => this.openDataChannel(), 250);
-    });
+    if (!this.dataChannel || !this.activeSession) { return; }
+    this.configureNative();
+    void this.native.connect(this.dataChannel).catch(error => this.nativeError(error));
   }
   private closeDataChannel(forgetInfo: boolean): void {
-    this.socketGeneration += 1;
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined; }
-    this.socket?.destroy();
-    this.socket = undefined;
+    if (forgetInfo) this.native.disconnect();
     if (forgetInfo) { this.dataChannel = undefined; }
   }
   async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
@@ -132,9 +161,9 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     view.onDidChangeVisibility(() => {
       const reopened = view.visible && !wasVisible;
       wasVisible = view.visible;
-      if (reopened) { this.replayHistory(); }
+      if (reopened) { this.post({ type: 'nativeRefresh' }); }
     });
-    if (this.dataChannel && !this.socket) { this.openDataChannel(); }
+    if (this.dataChannel) { this.openDataChannel(); }
     this.pushSnapshot();
   }
   async addChart(): Promise<void> { const index = this.layouts.length + 1; this.layouts.push({ id: `chart-${Date.now()}`, title: `Plot ${index}`, mode: 'time', variableIds: [] }); await this.saveLayouts(); }
@@ -173,33 +202,10 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     chart.variableIds = [...new Set([...chart.variableIds, ...selections.map(item => item.id)])];
     await this.saveLayouts();
   }
-  private acceptBatch(batch: SampleBatch): void {
-    if (this.state && (batch.sessionId !== this.state.sessionId || batch.programGeneration !== this.state.programGeneration || batch.streamEpoch !== this.state.streamEpoch)) { return; }
-    this.samples.fire(batch);
-    this.queueLiveWatchValues(latestLiveWatchValues(batch, this.liveWatchIds));
-    if (batch.channelIds.some(id => this.plotSubscriptionIds.has(id))) {
-      const displayedIds = new Set(this.layouts.flatMap(chart => chart.variableIds));
-      const plotted = selectBatchChannels(appendDerivedChannels(batch, this.layouts, this.catalog), displayedIds);
-      if (plotted.channelIds.length) {
-        this.history.push(plotted); this.historyValues += plotted.values.length; this.trimHistory();
-        if (this.view?.visible) { this.post({ type: 'samples', batch: plotted }); }
-      }
-    }
-  }
-  private queueLiveWatchValues(values: LiveWatchValue[]): void {
-    for (const value of values) { this.pendingLiveWatchValues.set(value.id, value); }
-    if (!values.length || this.liveWatchTimer) { return; }
-    const refreshRate = vscode.workspace.getConfiguration('cortexKit').get('liveWatchRefreshRate', 10);
-    this.liveWatchTimer = setTimeout(() => {
-      this.liveWatchTimer = undefined;
-      const pending = [...this.pendingLiveWatchValues.values()];
-      this.pendingLiveWatchValues.clear();
-      if (pending.length) { this.liveWatchValues.fire(pending); }
-    }, 1000 / Math.max(1, refreshRate));
-  }
   private async handleMessage(message: Record<string, unknown>): Promise<void> {
     switch (message.type) {
-      case 'ready': this.pushSnapshot(); this.replayHistory(); break;
+      case 'nativeRender': await this.renderNative(message); break;
+      case 'ready': this.pushSnapshot(); this.post({ type: 'nativeRefresh' }); break;
       case 'exportPlots': await this.chooseExportPlots(); break;
       case 'exportImage': await this.saveExportImage(message); break;
       case 'setHistorySeconds': {
@@ -247,9 +253,9 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private async saveLayouts(): Promise<void> { await this.context.workspaceState.update('cortexKit.plots', this.layouts); this.post({ type: 'layout', charts: this.layouts }); await this.updateSubscriptions(); }
   private async saveArrangement(): Promise<void> { await this.context.workspaceState.update('cortexKit.plotArrangement', this.arrangement); this.post({ type: 'layout', charts: this.layouts, arrangement: this.arrangement }); }
   private async updateSubscriptions(throwOnError = false): Promise<void> {
+    this.configureNative();
     if (!this.activeSession) { return; }
     const plotIds = resolveSubscriptionIds(this.layouts, this.catalog);
-    this.plotSubscriptionIds = new Set(plotIds);
     const plotRate = Number(this.activeSession.configuration.acquisition?.requestedSamplesPerSecond ?? 1000);
     const liveWatchRate = vscode.workspace.getConfiguration('cortexKit').get('liveWatchSamplesPerSecond', 20);
     const foregroundIds = [...new Set([...plotIds, ...(this.recording?.ids ?? [])])];
@@ -262,32 +268,17 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     catch (error) { if (this.lastSubscriptionKey === key) { this.lastSubscriptionKey = undefined; } this.post({ type: 'streamError', message: `Subscription failed: ${String(error)}` }); if (throwOnError) { throw error; } }
   }
   private pushSnapshot(): void { this.post({ type: 'snapshot', charts: this.layouts, arrangement: this.arrangement, variables: this.catalog, state: this.state, refreshRate: vscode.workspace.getConfiguration('cortexKit').get('chartRefreshRate', 30), historySeconds: this.historySeconds() }); void this.updateSubscriptions(); }
-  private trimHistory(): void {
-    const last = this.history.at(-1);
-    if (!last) { return; }
-    const end = (batch: SampleBatch) => batch.startTimestampNs + Math.max(0, batch.sampleCount - 1) * batch.samplePeriodNs;
-    const cutoff = end(last) - this.historySeconds() * 1e9;
-    // Bound the extension-side replay cache as well as its time span.
-    while (this.history.length > 1 && (end(this.history[0]) < cutoff || this.historyValues > 8_000_000)) {
-      this.historyValues -= this.history.shift()!.values.length;
-    }
-  }
-  private replayHistory(): void {
-    this.post({ type: 'clearHistory' });
-    for (const batch of this.history) { this.post({ type: 'samples', batch }); }
-  }
   private async chooseExportPlots(): Promise<void> {
     if (this.exporting) { return; }
-    const available = this.layouts.filter(chart => this.history.some(batch => batch.channelIds.some(id => chart.variableIds.includes(id))));
+    const available = this.layouts.filter(chart => this.native.hasHistory && chart.variableIds.length > 0);
     if (!available.length) { void vscode.window.showInformationMessage('还没有可导出的 Plot 数据。采样后或暂停、结束会话后再导出。'); return; }
     this.exporting = true;
-    const historyAtStart = this.history;
     try {
       const chosen = await vscode.window.showQuickPick(available.map(chart => ({ label: chart.title, description: `${chart.mode} · ${chart.variableIds.length} 个变量`, picked: true, chart })), {
         title: '导出 Plot 图片', placeHolder: '选择一个或多个图表，按当前顺序合并为一张 PNG', canPickMany: true,
       });
       if (!chosen?.length) { return; }
-      if (historyAtStart !== this.history) { throw new Error('已切换目标会话，请重新选择要导出的图表。'); }
+      if (!this.native.hasHistory) { throw new Error('已切换目标会话，请重新选择要导出的图表。'); }
       const selected = new Set(chosen.map(item => item.chart.id));
       const id = nonce();
       this.exportRequest = { id, timer: setTimeout(() => {
@@ -315,11 +306,19 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       void vscode.window.showInformationMessage(`Plot 图片已保存：${uri.fsPath}`);
     } finally { this.exporting = false; }
   }
-  private clearHistory(): void { this.history = []; this.historyValues = 0; this.post({ type: 'clearHistory' }); }
+  private clearHistory(): void { this.native.invalidateHistory(); this.post({ type: 'clearHistory' }); }
   private post(message: unknown): void { void this.view?.webview.postMessage(message); }
 }
 
 function nonce(): string { const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; return Array.from({ length: 32 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join(''); }
+function nativeBackendPath(context: vscode.ExtensionContext): string {
+  const configured = vscode.workspace.getConfiguration('cortexKit').get<string>('backendPath', '');
+  if (configured) return configured;
+  const executable = typeof process !== 'undefined' && process.platform === 'win32' ? 'cortex-kit-dap.exe' : 'cortex-kit-dap';
+  const root = context.extensionPath ?? context.extensionUri?.fsPath ?? '.';
+  const bundled = path.join(root, 'bin', executable);
+  return fs.existsSync(bundled) ? bundled : path.join(root, '..', 'target', 'debug', executable);
+}
 function variableLocation(variable: VariableDescriptor): string {
   if (variable.address !== undefined) { return `0x${variable.address.toString(16)}`; }
   if (variable.pointerAddress !== undefined) {
@@ -329,6 +328,7 @@ function variableLocation(variable: VariableDescriptor): string {
   return 'expression';
 }
 function html(webview: vscode.Webview, media: vscode.Uri): string {
+  const nativeScript = webview.asWebviewUri(vscode.Uri.joinPath(media, 'native-plot.js'));
   const script = webview.asWebviewUri(vscode.Uri.joinPath(media, 'main.js')); const style = webview.asWebviewUri(vscode.Uri.joinPath(media, 'styles.css')); const value = nonce();
-  return `<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${value}';"><link rel="stylesheet" href="${style}"></head><body><header><span id="connection">No session</span><span id="metrics"></span><label class="history-control">时间窗口 <select id="history-seconds" title="曲线显示与保留时长；加长后从现有数据继续积累"><option value="5">5 秒</option><option value="10">10 秒</option><option value="30" selected>30 秒</option><option value="60">1 分钟</option><option value="120">2 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="custom">自定义…</option></select></label><select id="arrangement" title="Chart arrangement"><option value="grid">Auto grid</option><option value="row">Side by side</option><option value="column">Stacked</option></select><button id="export-plots" title="选择一个或多个图表合并保存为 PNG">导出图片</button><button id="add-chart" title="Add chart">＋ Add chart</button></header><main id="charts"></main><script nonce="${value}" src="${script}"></script></body></html>`;
+  return `<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${value}';"><link rel="stylesheet" href="${style}"></head><body><header><span id="connection">No session</span><span id="metrics"></span><label class="history-control">时间窗口 <select id="history-seconds" title="曲线显示与保留时长；加长后从现有数据继续积累"><option value="5">5 秒</option><option value="10">10 秒</option><option value="30" selected>30 秒</option><option value="60">1 分钟</option><option value="120">2 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="custom">自定义…</option></select></label><select id="arrangement" title="Chart arrangement"><option value="grid">Auto grid</option><option value="row">Side by side</option><option value="column">Stacked</option></select><button id="export-plots" title="选择一个或多个图表合并保存为 PNG">导出图片</button><button id="add-chart" title="Add chart">＋ Add chart</button></header><main id="charts"></main><script nonce="${value}" src="${nativeScript}"></script><script nonce="${value}" src="${script}"></script></body></html>`;
 }

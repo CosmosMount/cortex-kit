@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  appendDerivedChannels,
   expandVariableSelections,
   expressionDescriptor,
   flattenVariables,
@@ -11,7 +10,7 @@ import {
   resolveSubscriptionIds,
   restoreLayoutExpressions,
 } from '../plotModel';
-import { ChartLayout, SampleBatch, VariableDescriptor } from '../types';
+import { ChartLayout, VariableDescriptor } from '../types';
 
 function leaf(id: string, name: string, expression: string, address: number): VariableDescriptor {
   return { id, name, expression, typeName: 'float', address, byteWidth: 4, scalarKind: 'float32', writable: true, children: [] };
@@ -60,19 +59,6 @@ test('plot subscriptions deduplicate shared leaves and expand expression depende
     { id: 'two', title: 'Two', mode: 'fft', variableIds: [member.id, element.id, 'missing'] },
   ];
   assert.deepEqual(resolveSubscriptionIds(charts, [...flattenVariables(catalogTree), expression]), [member.id, element.id]);
-});
-
-test('real interleaved sample batches retain leaf values and append derived channels per frame', () => {
-  const expression = expressionDescriptor('telemetry.speed + telemetry.history[0]');
-  const charts: ChartLayout[] = [{ id: 'one', title: 'One', mode: 'time', variableIds: [member.id, element.id, expression.id] }];
-  const batch: SampleBatch = {
-    sessionId: 'real-session', programGeneration: 2, streamEpoch: 4, batchSequence: 7,
-    sampleCount: 2, startTimestampNs: 100, samplePeriodNs: 10, droppedFrames: 0,
-    channelIds: [member.id, element.id], values: [1, 10, 2, 20],
-  };
-  const result = appendDerivedChannels(batch, charts, [...flattenVariables(catalogTree), expression]);
-  assert.deepEqual(result.channelIds, [member.id, element.id, expression.id]);
-  assert.deepEqual(result.values, [1, 10, 11, 2, 20, 22]);
 });
 
 test('persisted expression ids restore descriptors after an extension reload', () => {

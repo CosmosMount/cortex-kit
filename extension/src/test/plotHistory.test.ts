@@ -44,31 +44,11 @@ test('Plot time window persists without changing target subscriptions, and cance
   assert.equal(messages.at(-1).historySeconds, 75);
   assert.equal(requests, 0);
   assert.ok(messages.every(message => message.type === 'historyWindow'));
+  provider.dispose();
 });
 
-test('Plot keeps data beyond 30 seconds when extended and trims immediately when shortened', () => {
-  let receive: (event: any) => void = () => {};
-  const custom = { textContent: '' };
-  const nodes = new Map<string, any>();
-  const context: any = {
-    acquireVsCodeApi: () => ({ postMessage() {} }),
-    document: { getElementById: (id: string) => {
-      if (!nodes.has(id)) { nodes.set(id, { addEventListener() {}, querySelector: () => custom, value: '' }); }
-      return nodes.get(id);
-    } },
-    window: { addEventListener: (name: string, callback: any) => { if (name === 'message') { receive = callback; } } },
-    setTimeout() {},
-  };
+test('Plot webview has no raw-sample history or TypeScript FFT fallback', () => {
   const source = readFileSync(path.join(__dirname, '../../../webview-ui/main.js'), 'utf8');
-  runInNewContext(source.replace("vscode.postMessage({ type: 'ready' });", 'globalThis.historyForTest = histories;'), context);
-  receive({ data: { type: 'historyWindow', historySeconds: 120 } });
-  receive({ data: { type: 'samples', batch: { channelIds: ['signal'], sampleCount: 91, startTimestampNs: 0, samplePeriodNs: 1e9, streamEpoch: 1, droppedFrames: 0, values: Array.from({ length: 91 }, (_, i) => i) } } });
-  assert.equal(context.historyForTest.get('signal').length, 91);
-  receive({ data: { type: 'historyWindow', historySeconds: 10 } });
-  assert.equal(context.historyForTest.get('signal').length, 11);
-  assert.equal(context.historyForTest.get('signal')[0].t, 80);
-  receive({ data: { type: 'historyWindow', historySeconds: 75 } });
-  assert.equal(context.historyForTest.get('signal').length, 11, 'extending cannot recreate previously discarded data');
-  assert.equal(nodes.get('history-seconds').value, 'custom');
-  assert.equal(custom.textContent, '自定义：75 秒');
+  assert.doesNotMatch(source, /const histories|data\.type === 'samples'|function fftMagnitudes|function append\(batch\)/);
+  assert.match(source, /new NativePlot\(nativeOptions\)/);
 });

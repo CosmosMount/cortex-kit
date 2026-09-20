@@ -1,37 +1,7 @@
-import { LiveWatchValue, SampleBatch, ScalarKind, VariableDescriptor } from './types';
+import { ScalarKind, VariableDescriptor } from './types';
 
 export function mergeSubscriptionIds(plotIds: string[], liveWatchIds: string[]): string[] {
   return [...new Set([...plotIds, ...liveWatchIds])];
-}
-
-export function selectBatchChannels(batch: SampleBatch, selectedIds: Iterable<string>): SampleBatch {
-  const selected = new Set(selectedIds);
-  const sourceIndexes = batch.channelIds
-    .map((id, index) => selected.has(id) ? index : -1)
-    .filter(index => index >= 0);
-  const channelIds = sourceIndexes.map(index => batch.channelIds[index]);
-  const values: number[] = [];
-  for (let sample = 0; sample < batch.sampleCount; sample += 1) {
-    for (const channel of sourceIndexes) {
-      values.push(batch.values[sample * batch.channelIds.length + channel]);
-    }
-  }
-  return { ...batch, channelIds, values };
-}
-
-export function latestLiveWatchValues(batch: SampleBatch, selectedIds: Iterable<string>): LiveWatchValue[] {
-  if (!batch.sampleCount) { return []; }
-  const selected = new Set(selectedIds);
-  const lastSample = batch.sampleCount - 1;
-  const timestampNs = batch.startTimestampNs + lastSample * batch.samplePeriodNs;
-  const actualSamplesPerSecond = batch.samplePeriodNs > 0 ? 1e9 / batch.samplePeriodNs : 0;
-  return batch.channelIds.flatMap((id, channel) => selected.has(id) ? [{
-    id,
-    value: batch.values[lastSample * batch.channelIds.length + channel],
-    timestampNs,
-    actualSamplesPerSecond,
-    source: 'stream' as const,
-  }] : []);
 }
 
 export function formatLiveWatchValue(value: number, kind: ScalarKind): string {
