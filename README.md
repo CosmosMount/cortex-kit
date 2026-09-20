@@ -110,7 +110,7 @@ CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量..
 
 | 设置 | 含义 |
 | --- | --- |
-| `probe.speedKHz` | SWD / JTAG 请求时钟，单位 kHz；10000 表示 10 MHz |
+| `probe.speedKHz` | SWD / JTAG 请求时钟，单位 kHz；10000 表示 10 MHz。探针实际协商值显示在 Session 的 Probe 项中 |
 | `acquisition.requestedSamplesPerSecond` | Plot 请求采样频率；Maximum throughput 为 100000 S/s |
 | Sample 中的采样频率 | CSV 请求记录频率，与其他采集共享探针 |
 | `cortexKit.liveWatchSamplesPerSecond` | 仅 Live Watch 变量的请求频率，默认 20 S/s |

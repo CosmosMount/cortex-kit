@@ -282,7 +282,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cortex-kit-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "gimli 0.31.1",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-kit-dap"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "base64 0.22.1",
  "cortex-kit-core",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-kit-probe"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "cortex-kit-core",
