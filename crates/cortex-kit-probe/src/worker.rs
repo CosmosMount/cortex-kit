@@ -360,7 +360,7 @@ fn run_worker(
 // This amortizes core acquisition, allocation, event dispatch and binary framing
 // while remaining below an interactive command-latency frame on real probes.
 fn acquisition_frames(requested_hz: u32, frame_cost_ns: Option<u64>) -> usize {
-    let requested = (requested_hz.max(1) as usize).div_ceil(500);
+    let requested = (requested_hz.max(1) as usize).div_ceil(125);
     let budget = frame_cost_ns.map_or(1, |cost| (32_000_000 / cost.max(1)).max(1) as usize);
     requested.min(budget)
 }
@@ -750,8 +750,9 @@ mod tests {
         assert_eq!(super::acquisition_frames(100_000, None), 1);
         assert_eq!(super::acquisition_frames(100_000, Some(8_000_000)), 4);
         assert_eq!(super::acquisition_frames(100_000, Some(1_000_000)), 32);
-        assert_eq!(super::acquisition_frames(100_000, Some(100_000)), 200);
-        assert_eq!(super::acquisition_frames(100_000, Some(1_000)), 200);
+        assert_eq!(super::acquisition_frames(100_000, Some(100_000)), 320);
+        assert_eq!(super::acquisition_frames(100_000, Some(1_000)), 800);
+        assert_eq!(super::acquisition_frames(5_000, Some(1_000_000)), 32);
         assert_eq!(super::acquisition_frames(20, Some(1_000)), 1);
     }
 

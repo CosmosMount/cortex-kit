@@ -1546,6 +1546,20 @@ impl MemoryInterface<ArmError> for StLinkMemoryInterface<'_> {
             return Ok(());
         }
 
+        // Scattered telemetry reads reach this path one word at a time. Avoid a
+        // heap allocation for every word while retaining the normal ST-Link
+        // command and status check.
+        if data.len() == 1 {
+            let mut buff = [0_u8; 4];
+            self.probe.probe.read_mem_32bit(
+                address,
+                &mut buff,
+                self.current_ap.ap_address().ap_v1()?,
+            )?;
+            data[0] = u32::from_le_bytes(buff);
+            return Ok(());
+        }
+
         // Read needs to be chunked into chunks with appropiate max length (see STLINK_MAX_READ_LEN).
         for (index, chunk) in data.chunks_mut(STLINK_MAX_READ_LEN / 4).enumerate() {
             let mut buff = vec![0u8; 4 * chunk.len()];

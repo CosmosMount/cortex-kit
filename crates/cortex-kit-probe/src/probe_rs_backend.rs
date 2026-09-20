@@ -169,12 +169,13 @@ impl Backend for ProbeRsBackend {
         probe
             .select_protocol(protocol)
             .map_err(|error| format!("failed to select {protocol:?}: {error:?}"))?;
-        probe.set_speed(config.speed_khz).map_err(|error| {
+        let actual_speed_khz = probe.set_speed(config.speed_khz).map_err(|error| {
             format!(
                 "failed to set probe speed to {} kHz: {error:?}",
                 config.speed_khz
             )
         })?;
+        self.name = format!("{} @ {actual_speed_khz} kHz", self.name);
         let session = if config.connect_under_reset {
             probe.attach_under_reset(config.chip.clone(), Default::default())
         } else {
