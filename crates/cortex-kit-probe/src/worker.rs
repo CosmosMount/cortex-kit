@@ -7,7 +7,7 @@ use std::{
 use cortex_kit_core::{
     AcquisitionStats, SampleBatch, ScalarKind, SessionState, TargetState, VariableDescriptor,
 };
-use crossbeam_channel::{Receiver, Sender, bounded, select_biased, tick};
+use crossbeam_channel::{Receiver, Sender, after, bounded, select_biased};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ pub struct Breakpoint {
     pub address: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchSpec {
     pub id: String,
@@ -224,7 +224,6 @@ fn run_worker(
     normal: Receiver<Envelope>,
     events: Sender<WorkerEvent>,
 ) {
-    let acquisition_timer = tick(Duration::from_millis(2));
     let mut state = SessionState {
         session_id: make_session_id(),
         ..Default::default()
@@ -242,6 +241,11 @@ fn run_worker(
     let mut next_status_poll = Instant::now();
     let mut running = true;
     while running {
+        let acquisition_timer = after(acquisition_wait(
+            &state.target_state,
+            !watches.is_empty(),
+            requested_hz,
+        ));
         select_biased! {
             recv(urgent) -> message => if let Ok(envelope) = message {
                 let previous_state = state.target_state.clone();
@@ -300,7 +304,7 @@ fn run_worker(
                     }
                     next_status_poll = schedule_next_status_poll(Instant::now(), !watches.is_empty());
                 }
-                if is_executing(&state.target_state) && !watches.is_empty() && (requested_hz >= 500 || Instant::now() >= next_acquisition) {
+                if is_executing(&state.target_state) && !watches.is_empty() && Instant::now() >= next_acquisition {
                     let frames = acquisition_frames(requested_hz, frame_cost_ns);
                     next_acquisition = Instant::now() + Duration::from_secs_f64(frames as f64 / requested_hz as f64);
                     let acquisition_started_ns = elapsed_ns(started);
@@ -335,6 +339,10 @@ fn run_worker(
                     }
                 } else if !is_executing(&state.target_state) || watches.is_empty() {
                     previous_acquisition_end_ns = None;
+                } else if requested_hz >= 500 {
+                    // Avoid the coarse Windows timer while preserving the requested
+                    // rate as an upper bound for fast probes and the mock backend.
+                    thread::yield_now();
                 }
                 if is_executing(&state.target_state) {
                     background.sample_if_due(&mut *backend, &events, &mut state, started, &mut batch_sequence);
@@ -348,10 +356,12 @@ fn run_worker(
 }
 
 // Keep a high requested rate from turning a slow USB probe into a seconds-long
-// uninterruptible read. Start with one frame, then budget about 2 ms per call.
+// uninterruptible read. Start with one frame, then budget about 32 ms per call.
+// This amortizes core acquisition, allocation, event dispatch and binary framing
+// while remaining below an interactive command-latency frame on real probes.
 fn acquisition_frames(requested_hz: u32, frame_cost_ns: Option<u64>) -> usize {
     let requested = (requested_hz.max(1) as usize).div_ceil(500);
-    let budget = frame_cost_ns.map_or(1, |cost| (2_000_000 / cost.max(1)).max(1) as usize);
+    let budget = frame_cost_ns.map_or(1, |cost| (32_000_000 / cost.max(1)).max(1) as usize);
     requested.min(budget)
 }
 
@@ -625,6 +635,14 @@ fn is_executing(state: &TargetState) -> bool {
 const STATUS_POLL_WITHOUT_WATCHES: Duration = Duration::from_millis(20);
 const STATUS_POLL_WHILE_ACQUIRING: Duration = Duration::from_millis(100);
 
+fn acquisition_wait(state: &TargetState, has_watches: bool, requested_hz: u32) -> Duration {
+    if is_executing(state) && has_watches && requested_hz >= 500 {
+        Duration::ZERO
+    } else {
+        Duration::from_millis(2)
+    }
+}
+
 fn schedule_next_status_poll(now: Instant, acquiring: bool) -> Instant {
     now + if acquiring {
         STATUS_POLL_WHILE_ACQUIRING
@@ -706,10 +724,33 @@ fn make_session_id() -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn high_rate_acquisition_does_not_wait_for_a_coarse_os_timer() {
+        assert_eq!(
+            super::acquisition_wait(&TargetState::Running, true, 500),
+            Duration::ZERO
+        );
+        assert_eq!(
+            super::acquisition_wait(&TargetState::Running, true, 499),
+            Duration::from_millis(2)
+        );
+        assert_eq!(
+            super::acquisition_wait(
+                &TargetState::Halted {
+                    reason: "test".into(),
+                },
+                true,
+                500,
+            ),
+            Duration::from_millis(2)
+        );
+    }
+
+    #[test]
     fn high_requested_rate_keeps_slow_probe_batches_responsive() {
         assert_eq!(super::acquisition_frames(100_000, None), 1);
-        assert_eq!(super::acquisition_frames(100_000, Some(8_000_000)), 1);
-        assert_eq!(super::acquisition_frames(100_000, Some(100_000)), 20);
+        assert_eq!(super::acquisition_frames(100_000, Some(8_000_000)), 4);
+        assert_eq!(super::acquisition_frames(100_000, Some(1_000_000)), 32);
+        assert_eq!(super::acquisition_frames(100_000, Some(100_000)), 200);
         assert_eq!(super::acquisition_frames(100_000, Some(1_000)), 200);
         assert_eq!(super::acquisition_frames(20, Some(1_000)), 1);
     }
