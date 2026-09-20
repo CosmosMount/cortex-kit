@@ -106,7 +106,7 @@ For STM32H723, use `STM32H723.svd` from the [Open-CMSIS-Pack STM32H7 Device Fami
   "programBinary": "${workspaceFolder}/build/firmware.elf",
   "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 10000, "connectUnderReset": false },
   "flashing": { "enabled": true, "verify": true, "resetAfter": true },
-  "acquisition": { "requestedSamplesPerSecond": 5000, "maxBurstMs": 2, "historySeconds": 30 },
+  "acquisition": { "requestedSamplesPerSecond": 5000, "historySeconds": 30 },
   "svdFile": "${workspaceFolder}/.vscode/svd/STM32H723.svd"
 }
 ```
@@ -265,28 +265,15 @@ The run confirms end-to-end flashing, DWARF structure and array expansion, plott
 
 ## Mixed-rate acquisition regression
 
-The hardware harness also accepts `CORTEX_KIT_SELECTION`, a JSON file containing `ids` (Plot), `backgroundIds` (watch-only), and `backgroundSamplesPerSecond` (normally 20). Shared IDs are removed from the background subscription. Omit the background fields to reproduce the previous merged workload. `CORTEX_KIT_BACKEND` optionally selects an exact adapter executable for A/B comparisons. Unknown IDs fail the test rather than silently replacing the requested workload.
+The hardware harness also accepts `CORTEX_KIT_SELECTION`, a JSON file containing `ids` (Plot), `backgroundIds` (watch-only), and `backgroundSamplesPerSecond` (normally 20). Shared IDs are removed from the background subscription. Omit the background fields to reproduce the previous merged workload. `CORTEX_KIT_BACKEND` optionally selects an exact adapter executable for A/B comparisons. Set `CORTEX_KIT_RESULT` to save the complete JSON result for reproducible performance records. Unknown IDs fail the test rather than silently replacing the requested workload.
 
 Measure `variables[].observedSamplesPerSecond` separately for the Plot and background channels. The top-level last-batch period can belong to either group. The test checks `acquisitionState.lastError`, reports the exact executable and selection, and does not require flashing. See [the September 12 measurements](PERFORMANCE_2026-09-12.md).
 
 
 ## CSV recorder validation
 
-`npm test` covers time-based frame selection, hardware-limited rates, duplicate packets, pause/epoch gaps, CSV quoting/BOM and round trips, malformed input, timestamp units, peak-preserving curve reduction, zoom range recovery, streaming file writes, restoring other subscriptions after stop/failure, safe automatic attach, and duration-based stop.
-
-To collect a real CSV with the production frame selector and parser in the hardware harness, set `CORTEX_KIT_CSV` to a writable output file and `CORTEX_KIT_CSV_RATE` to the recording rate before invoking `hardware-dap-smoke.mjs`. The optional `CORTEX_KIT_SELECTION` fixture specifies the foreground and background groups. The harness records the foreground group, reopens the CSV and verifies its row and column counts. Normal application recording uses a streaming writer rather than retaining the whole acquisition in memory.
-
-A 2026-09-12 ST-Link / STM32H723VG run with 4 foreground channels and 19 background watches, foreground requested at 5000 S/s, and CSV requested at 200 S/s wrote **1001 rows over 5.000845 s**, **199.966 S/s** observed. CSV reimport passed, with zero adapter errors and zero dropped frames. See `performance/2026-09-12/recorder-hardware.json` for the precise workload and `recorder-hardware.csv` for the data. The browser preview was checked for curve selection, wheel zoom, hover readout and reset, with no JavaScript console errors.
-
-
-## RTOS thread inspection
-
-`npm test --prefix extension` covers ThreadX and FreeRTOS dynamic-list decoding, corrupt list detection, optional runtime/stack fields, counter wrap/reset, rolling occupancy, and hidden/paused/disposed view lifecycle. FreeRTOS validation currently uses memory fixtures; the hardware run below uses ThreadX.
-
-After compiling the extension and release backend, run the read-only hardware check:
-
-```powershell
-node tests/rtos-hardware-smoke.mjs <matching-firmware.elf> <probe-rs-chip> <report.json> [selection.json]
-```
-
-This attaches without reset/flashing and reads thread snapshots for ten seconds. The optional selection file uses the existing foreground/background subscription format. Results from WBR2026 on 2026-09-12 are in `performance/2026-09-12/threads-hardware.json`: eight ThreadX threads, eight snapshots, 73 current-thread observations and zero snapshot errors. With 19 Live Watch + 4 Plot channels, the backend's reported sample rate was 1131.31 S/s before and 1083.35 S/s with thread reads (~4.2% lower in this run). These are short-run observations, not a general performance guarantee. The firmware did not expose execution-time counters; occupancy is sampled, not cycle-accurate.
+Rust unit tests cover time-based real-frame selection, pause/epoch gaps, CSV quoting,
+bounded preview reduction, queue overflow handling, and final flush acknowledgement.
+The TypeScript extension only chooses variables and paths, forwards start/stop
+commands, and renders the bounded preview returned by Rust. It contains no CSV
+parser, sampler, raw history, FFT, or signal-expression evaluator.

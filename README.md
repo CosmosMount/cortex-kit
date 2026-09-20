@@ -35,7 +35,7 @@ code --install-extension .\cortex-kit-win32-x64.vsix
 
 执行 **Cortex Kit: Configure Probe / Sampling** 可修改已有配置的探针、协议、时钟、连接方式和请求采样率，同时保留芯片、固件、SVD 等配置。
 
-**DAPLink 已通过 CMSIS-DAP 后端接入。** Horco CMSIS-DAP 已在 STM32H723VG / wbr_2026 上验证连接、采样、暂停和继续；尚未验证所有 DAPLink 固件和 DAPLink 烧录。ST-Link 已验证连接、采样、烧录与校验。更多实测见 [DAPLink 测试记录](docs/DAPLINK_2026-09-12.md)。
+**DAPLink 已通过 CMSIS-DAP 后端接入。** Horco CMSIS-DAP 已使用 `robomaster/pnx_template` 的 STM32H723VG 固件验证连接、烧录、校验、复位、连续压力采样、暂停和继续；不同 DAPLink 固件仍需分别验证。ST-Link 同样已验证连接、采样、烧录与校验。更多实测见 [pnx_template DAPLink 压力测试](docs/performance/2026-09-20/DAPLINK_ROBOMASTER_PNX_TEMPLATE.md)。
 
 ### 手动配置示例
 
@@ -60,7 +60,7 @@ code --install-extension .\cortex-kit-win32-x64.vsix
       "connectUnderReset": false
     },
     "flashing": { "enabled": false, "verify": false, "resetAfter": false },
-    "acquisition": { "requestedSamplesPerSecond": 100000, "maxBurstMs": 2, "historySeconds": 30 }
+    "acquisition": { "requestedSamplesPerSecond": 100000, "historySeconds": 30 }
   }]
 }
 ```
@@ -91,17 +91,7 @@ Live Plot 模式允许主动暂停 / 继续和上述变量写入，禁止烧录�
 2. 点击 **开始记录**并选择 CSV 保存位置。尚未连接时会选择已有配置，以不烧录、不复位、不执行构建任务的方式 attach。目标暂停时需 Continue 才能产生样本。
 3. 记录会持续写入磁盘，直到点击 **停止并保存**。没有定时自动停止；隐藏、关闭或重新打开 Sample 面板不会中断后台记录。
 4. 暂停目标期间保持文件打开，继续后在同一 CSV 中保留实际时间间隔。临时读取失败或数据连接重连会等待新样本；会话结束 / 切换、VS Code 扩展宿主退出、磁盘写入失败或写入积压超过限制时会结束记录并报告状态。
-5. 点击 **导入 CSV** 可离线查看数据，选择时间列及 s / ms / µs / ns 单位、选择信号列，然后滚轮缩放、拖动平移或悬停读值。**显示全部**恢复全范围。
-
-CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量...>`。时间戳来自适配器的单调主机时钟和实测读取批次，不是 UTC 或目标固件时间戳。记录只使用真实收到的样本，不通过插值或重复值补齐请求频率。预览只保留最近 4000 行，CSV 写入全部实际记录行。导入上限为 64 MB、256 列、200 万个单元格。
-
-## Threads：RTOS 线程与栈内存
-
-底部 **Threads** 支持单核 Cortex-M 上的 **ThreadX / FreeRTOS**，根据匹配固件 ELF 的 DWARF 信息自动识别线程列表。应用及 RTOS 内核都应带调试信息；暂不支持其他 RTOS 或 SMP。
-
-可查看线程名、状态、优先级、TCB 地址、栈分配 / 已用字节和**栈内存占用百分比**。百分比为已用栈 / 已分配栈，保留一位小数；缺失或无效数据显示 `—`。它基于保存的栈指针估算，不是堆占用、整机 RAM 占用或栈历史高水位；FreeRTOS 还需要 TCB 中提供栈结束地址。
-
-线程时间计数器占比列已移除。保留的运行占比通过最近 30 秒的当前线程指针观测估算，支持 2 / 10 / 20 Hz 刷新，可能漏掉短任务，也可能将中断时间计入被中断线程。只有 Threads 可见且开启自动刷新时才轮询；轮询会消耗共享探针带宽。
+CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量...>`。时间戳来自适配器的单调主机时钟和实测读取批次，不是 UTC 或目标固件时间戳。记录只使用真实收到的样本，不通过插值或重复值补齐请求频率。预览只保留最近 4000 行，CSV 写入全部实际记录行。采样选择、抽样、预览聚合与文件写入均在 Rust 数据核心完成。
 
 ## 外设、构建、烧录与调试
 
@@ -127,7 +117,7 @@ CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量..
 | `cortexKit.chartRefreshRate` | Plot 绘制刷新率，默认 30 FPS，不是采样率 |
 | `cortexKit.historySeconds` | Plot 滚动显示与保留时长，不会定时停止 Sample |
 
-减少同时监视的变量，优先使用地址连续的普通 RAM 变量，关闭暂时不需要的 Threads 轮询，再观察实际速率和丢帧。图表之间的重复变量会共享读取。CMSIS-DAP 返回的时钟是请求上限，不能据此认定实际物理时钟；提高时钟未必提高吞吐量。Horco CMSIS-DAP 在当前 wbr_2026 混合负载下实测约 100 S/s，未达到 100000 S/s；完整条件见 [性能记录](docs/DAPLINK_2026-09-12.md)。
+减少同时监视的变量，优先使用地址连续的普通 RAM 变量，再观察实际速率和丢帧。图表之间的重复变量会共享读取。CMSIS-DAP 返回的时钟是请求上限，不能据此认定实际物理时钟；提高时钟未必提高吞吐量。使用 `robomaster/pnx_template`、STM32H723VG 和 Horco CMSIS-DAP 的最终 30 秒实测中，8 个连续浮点通道为 371.78 S/s，32 个分散 32 位通道为 83.65 S/s，均为零读错、零丢帧；完整条件见 [pnx_template DAPLink 压力测试](docs/performance/2026-09-20/DAPLINK_ROBOMASTER_PNX_TEMPLATE.md)。
 
 ## 常见问题
 

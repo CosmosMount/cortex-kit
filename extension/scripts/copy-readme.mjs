@@ -3,6 +3,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE']) {
+for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE', 'THIRD_PARTY_LICENSES.md']) {
   await copyFile(join(here, '..', '..', file), join(here, '..', file));
 }

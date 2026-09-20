@@ -2,7 +2,7 @@
   "name": "cortex-kit",
   "displayName": "Cortex Kit",
   "description": "Native Cortex-M debugging, peripheral inspection, plotting and FFT through probe-rs.",
-  "version": "0.1.13",
+  "version": "1.1.0",
   "publisher": "CosmosMount",
   "license": "MIT",
   "repository": {
@@ -27,10 +27,10 @@
   ],
   "main": "./out/extension.js",
   "extensionDependencies": ["ms-vscode.cmake-tools", "ms-vscode.cpptools"],
-  "files": ["out/*.js", "media", "resources", "bin", "README.md", "CHANGELOG.md", "LICENSE", "package.json"],
+  "files": ["out/*.js", "media", "resources", "bin", "README.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_LICENSES.md", "package.json"],
   "scripts": {
     "build": "npm run compile",
-    "compile": "tsc -p . && node scripts/copy-webview.mjs",
+    "compile": "node scripts/clean-out.mjs && tsc -p . && node scripts/copy-webview.mjs",
     "build:backend:release": "node scripts/build-backend.mjs --release",
     "bundle:backend": "node scripts/copy-backend.mjs",
     "copy:readme": "node scripts/copy-readme.mjs",
@@ -85,14 +85,13 @@
       },
       "initialConfigurations": [
         { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Mock Debug", "chip": "Cortex-M Mock", "mockProbe": true, "stopOnEntry": true, "acquisition": { "requestedSamplesPerSecond": 1000 } },
-        { "type": "cortex-kit", "request": "attach", "name": "Cortex Kit: Live Plot (Attach)", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "plotOnly": true, "stopOnEntry": false, "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 4000, "connectUnderReset": false }, "flashing": { "enabled": false, "verify": false, "resetAfter": false }, "acquisition": { "requestedSamplesPerSecond": 1000, "maxBurstMs": 2, "historySeconds": 30 } },
-        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Flash & Debug", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 10000, "connectUnderReset": false }, "flashing": { "enabled": true, "verify": true, "resetAfter": true }, "acquisition": { "requestedSamplesPerSecond": 5000, "maxBurstMs": 2, "historySeconds": 30 } }
+        { "type": "cortex-kit", "request": "attach", "name": "Cortex Kit: Live Plot (Attach)", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "plotOnly": true, "stopOnEntry": false, "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 4000, "connectUnderReset": false }, "flashing": { "enabled": false, "verify": false, "resetAfter": false }, "acquisition": { "requestedSamplesPerSecond": 1000, "historySeconds": 30 } },
+        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Flash & Debug", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 10000, "connectUnderReset": false }, "flashing": { "enabled": true, "verify": true, "resetAfter": true }, "acquisition": { "requestedSamplesPerSecond": 5000, "historySeconds": 30 } }
       ]
     }],
     "viewsContainers": { "panel": [
       { "id": "cortex-kit-panel", "title": "Plot", "icon": "resources/cortex-kit.svg" },
-      { "id": "cortex-kit-sample", "title": "Sample", "icon": "resources/cortex-kit.svg" },
-      { "id": "cortex-kit-threads", "title": "Threads", "icon": "resources/cortex-kit.svg" }
+      { "id": "cortex-kit-sample", "title": "Sample", "icon": "resources/cortex-kit.svg" }
     ] },
     "views": {
       "debug": [
@@ -103,9 +102,6 @@
       ],
       "cortex-kit-panel": [
         { "id": "cortexKit.plots", "name": "Plot", "type": "webview", "order": 1 }
-      ],
-      "cortex-kit-threads": [
-        { "id": "cortexKit.threads", "name": "Threads", "type": "webview", "visibility": "visible" }
       ],
       "cortex-kit-sample": [
         { "id": "cortexKit.sample", "name": "Sample", "type": "webview", "order": 1, "visibility": "visible" }

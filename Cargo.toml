@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -15,7 +15,6 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1.0"
 crossbeam-channel = "0.5"
-crossbeam-queue = "0.3"
 gimli = "0.31"
 object = { version = "0.36", features = ["read", "elf"] }
 probe-rs = "=0.31.0"

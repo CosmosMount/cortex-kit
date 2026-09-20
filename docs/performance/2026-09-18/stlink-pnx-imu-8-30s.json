@@ -1,0 +1,175 @@
+{
+  "probe": "STLink V2-1,SN:00400038480000014E575152",
+  "chip": "STM32H723VG",
+  "speedKHz": 4000,
+  "backendProfile": "release",
+  "executable": "D:\\Workspace\\projects\\cortex-kit\\target\\release\\cortex-kit-dap.exe",
+  "selection": {
+    "ids": [
+      "dwarf:200001d4:demo_debug_instance.imu_unit.quaternion[0]",
+      "dwarf:200001d8:demo_debug_instance.imu_unit.quaternion[1]",
+      "dwarf:200001dc:demo_debug_instance.imu_unit.quaternion[2]",
+      "dwarf:200001e0:demo_debug_instance.imu_unit.quaternion[3]",
+      "dwarf:200001e4:demo_debug_instance.imu_unit.yaw",
+      "dwarf:200001e8:demo_debug_instance.imu_unit.pitch",
+      "dwarf:200001ec:demo_debug_instance.imu_unit.roll",
+      "dwarf:200001f0:demo_debug_instance.imu_unit.total_yaw"
+    ]
+  },
+  "acquisitionState": {
+    "actualSamplesPerSecond": 622.5698664792495,
+    "chip": "STM32H723VG",
+    "droppedFrames": 0,
+    "lastError": null,
+    "probeName": "STLink V2-1 (00400038480000014E575152)",
+    "programGeneration": 0,
+    "revision": 32,
+    "sessionId": "b0ec-18d6614dc3e7b95c",
+    "stopId": 1,
+    "streamEpoch": 2,
+    "targetState": "running"
+  },
+  "requestedSamplesPerSecond": 5000,
+  "channelProfile": "contiguous",
+  "channelCount": 8,
+  "connectUnderReset": false,
+  "durationSeconds": 30,
+  "flashed": false,
+  "plotOnly": false,
+  "rootVariables": 169,
+  "scalarLeaves": 16919,
+  "batches": 2386,
+  "acquisitionBenchmark": {
+    "enabled": true,
+    "requestedDurationSeconds": 5,
+    "requestedSamplesPerSecond": 5000,
+    "actualSamplesPerSecond": 622.4,
+    "meanIntervalMicros": 1606.8316939890715,
+    "p95IntervalMicros": 2185.9,
+    "p99IntervalMicros": 3292.2,
+    "readErrors": 0
+  },
+  "sourceBreakpoint": {
+    "enabled": false
+  },
+  "debugControl": {
+    "enabled": true,
+    "pauseResponseMs": 6.26,
+    "pauseStoppedEventMs": 6.39,
+    "resumeResponseMs": 10.98,
+    "registerCount": 20,
+    "pc": {
+      "name": "R15/PC",
+      "value": "0x08000364"
+    },
+    "peripheralRegister": {
+      "name": "DBGMCU_IDC",
+      "address": "0x5c001000",
+      "value": "0x10016483"
+    },
+    "selectedRegisters": []
+  },
+  "plotProtection": {
+    "enabled": false
+  },
+  "subscriptionUpdate": {
+    "autoPaused": true
+  },
+  "runningWrite": {
+    "enabled": false
+  },
+  "actualCollectionSeconds": 30.005,
+  "reportedBatchSamplePeriodNs": 1620014,
+  "reportedBatchSamplesPerSecond": 617.278616110725,
+  "droppedFrames": 0,
+  "variables": [
+    {
+      "expression": "demo_debug_instance.imu_unit.quaternion[0]",
+      "type": "float",
+      "address": "0x200001d4",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 1,
+      "last": 1,
+      "min": 1,
+      "max": 1
+    },
+    {
+      "expression": "demo_debug_instance.imu_unit.quaternion[1]",
+      "type": "float",
+      "address": "0x200001d8",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "demo_debug_instance.imu_unit.quaternion[2]",
+      "type": "float",
+      "address": "0x200001dc",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "demo_debug_instance.imu_unit.quaternion[3]",
+      "type": "float",
+      "address": "0x200001e0",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "demo_debug_instance.imu_unit.yaw",
+      "type": "float",
+      "address": "0x200001e4",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "demo_debug_instance.imu_unit.pitch",
+      "type": "float",
+      "address": "0x200001e8",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "demo_debug_instance.imu_unit.roll",
+      "type": "float",
+      "address": "0x200001ec",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "demo_debug_instance.imu_unit.total_yaw",
+      "type": "float",
+      "address": "0x200001f0",
+      "samples": 17935,
+      "observedSamplesPerSecond": 597.74,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    }
+  ]
+}

@@ -1,0 +1,419 @@
+{
+  "probe": "STLink V2-1,SN:00400038480000014E575152",
+  "chip": "STM32H723VG",
+  "speedKHz": 4000,
+  "backendProfile": "release",
+  "executable": "D:\\Workspace\\projects\\cortex-kit\\target\\release\\cortex-kit-dap.exe",
+  "acquisitionState": {
+    "actualSamplesPerSecond": 394.56428266265567,
+    "chip": "STM32H723VG",
+    "droppedFrames": 0,
+    "lastError": null,
+    "probeName": "STLink V2-1 (00400038480000014E575152)",
+    "programGeneration": 0,
+    "revision": 8,
+    "sessionId": "a5cc-18d660f750a42c60",
+    "stopId": 1,
+    "streamEpoch": 2,
+    "targetState": "running"
+  },
+  "requestedSamplesPerSecond": 5000,
+  "channelProfile": "contiguous",
+  "channelCount": 32,
+  "connectUnderReset": false,
+  "durationSeconds": 5,
+  "flashed": false,
+  "plotOnly": true,
+  "rootVariables": 169,
+  "scalarLeaves": 16919,
+  "batches": 349,
+  "acquisitionBenchmark": {
+    "enabled": true,
+    "requestedDurationSeconds": 1,
+    "requestedSamplesPerSecond": 5000,
+    "actualSamplesPerSecond": 388,
+    "meanIntervalMicros": 2584.575452196383,
+    "p95IntervalMicros": 3261.6,
+    "p99IntervalMicros": 4122.1,
+    "readErrors": 0
+  },
+  "sourceBreakpoint": {
+    "enabled": false
+  },
+  "debugControl": {
+    "enabled": false
+  },
+  "plotProtection": {
+    "enabled": true,
+    "breakpointBlocked": true,
+    "pauseAllowed": true,
+    "continueAllowed": true,
+    "pauseResponseMs": 3.95,
+    "memoryWriteBlocked": true,
+    "typedLiveWatchWriteAvailable": true
+  },
+  "subscriptionUpdate": {
+    "autoPaused": true
+  },
+  "runningWrite": {
+    "enabled": false
+  },
+  "actualCollectionSeconds": 5.002,
+  "reportedBatchSamplePeriodNs": 2557325,
+  "reportedBatchSamplesPerSecond": 391.03359956204235,
+  "droppedFrames": 0,
+  "variables": [
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.sample_error_count",
+      "type": "uint32_t",
+      "address": "0x20000434",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.imu_spi_read_error_count",
+      "type": "uint32_t",
+      "address": "0x20000438",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.imu_spi_write_error_count",
+      "type": "uint32_t",
+      "address": "0x2000043c",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.imu_spi_lock_error_count",
+      "type": "uint32_t",
+      "address": "0x20000440",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.update_count",
+      "type": "uint32_t",
+      "address": "0x20000444",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.gyro_ready_count",
+      "type": "uint32_t",
+      "address": "0x20000448",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 319517,
+      "last": 329525,
+      "min": 319517,
+      "max": 329525
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.gyro_ready_drained",
+      "type": "uint32_t",
+      "address": "0x2000044c",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.gyro_ready_startup_drained",
+      "type": "uint32_t",
+      "address": "0x20000450",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.loop_runtime_us",
+      "type": "uint32_t",
+      "address": "0x20000454",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.loop_runtime_max_us",
+      "type": "uint32_t",
+      "address": "0x20000458",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.loop_runtime_overruns",
+      "type": "uint32_t",
+      "address": "0x2000045c",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.loop_runtime_avg_us",
+      "type": "float",
+      "address": "0x20000460",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.dt_s",
+      "type": "float",
+      "address": "0x20000464",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.dt_min_s",
+      "type": "float",
+      "address": "0x20000468",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.dt_max_s",
+      "type": "float",
+      "address": "0x2000046c",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.temperature",
+      "type": "float",
+      "address": "0x20000470",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 23,
+      "last": 23,
+      "min": 23,
+      "max": 23
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.accel_norm",
+      "type": "float",
+      "address": "0x20000474",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.gyro_norm",
+      "type": "float",
+      "address": "0x20000478",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.gyro[0]",
+      "type": "float",
+      "address": "0x2000047c",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.gyro[1]",
+      "type": "float",
+      "address": "0x20000480",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.gyro[2]",
+      "type": "float",
+      "address": "0x20000484",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.calibrated_gyro_offset[0]",
+      "type": "float",
+      "address": "0x20000488",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.calibrated_gyro_offset[1]",
+      "type": "float",
+      "address": "0x2000048c",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.calibrated_gyro_offset[2]",
+      "type": "float",
+      "address": "0x20000490",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.quaternion[0]",
+      "type": "float",
+      "address": "0x20000494",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 1,
+      "last": 1,
+      "min": 1,
+      "max": 1
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.quaternion[1]",
+      "type": "float",
+      "address": "0x20000498",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.quaternion[2]",
+      "type": "float",
+      "address": "0x2000049c",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.quaternion[3]",
+      "type": "float",
+      "address": "0x200004a0",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.yaw",
+      "type": "float",
+      "address": "0x200004a4",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.pitch",
+      "type": "float",
+      "address": "0x200004a8",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.roll",
+      "type": "float",
+      "address": "0x200004ac",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    {
+      "expression": "ahrs::ahrs_debug_telemetry.total_yaw",
+      "type": "float",
+      "address": "0x200004b0",
+      "samples": 1873,
+      "observedSamplesPerSecond": 374.44,
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    }
+  ]
+}

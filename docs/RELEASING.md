@@ -3,10 +3,10 @@
 ## 当前发布目标
 
 - 扩展 ID：`CosmosMount.cortex-kit`
-- 扩展版本：`0.1.13`
+- 扩展版本：`1.1.0`
 - 平台：`win32-x64`；包含 Windows x64 Rust 后端，不作为跨平台包发布。
 - 产物：仓库根目录 `cortex-kit-win32-x64.vsix`
-- 许可证：根目录 `LICENSE`，扩展 manifest 与 Rust crates 均声明 MIT。
+- 许可证：根目录 `LICENSE`，扩展 manifest 与 Rust crates 均声明 MIT；`THIRD_PARTY_LICENSES.md` 和 `vendor/probe-rs/LICENSE-MIT` 记录受控 probe-rs fork 的上游版本与许可证。
 
 旧的本地兼容包使用过 `cortex-kit.cortex-kit` ID。它与正式 ID 是不同扩展，发布时只能使用正式 ID；迁移测试时先禁用旧扩展，避免重复注册调试类型。`.tmp/` 中的兼容 VSIX 不用于发布。
 
@@ -28,7 +28,7 @@ npm run package
 
 `npm run package` 会编译 TypeScript、构建 release 后端、复制 Webview、README、CHANGELOG 和 LICENSE，再生成 VSIX。扩展没有 npm 运行时依赖，打包使用 `--no-dependencies`；新增运行时依赖时须相应修改打包策略。
 
-开发时打开仓库按 F5 启动 Extension Development Host，使用 **Cortex Kit: Mock Debug** 验证无硬件路径。硬件流程见 [TESTING](TESTING.md)、[DAPLink 记录](DAPLINK_2026-09-12.md)和[实现状态](IMPLEMENTATION_STATUS.md)。
+开发时打开仓库按 F5 启动 Extension Development Host，使用 **Cortex Kit: Mock Debug** 验证无硬件路径。硬件流程见 [TESTING](TESTING.md)、[pnx_template DAPLink 压力测试](performance/2026-09-20/DAPLINK_ROBOMASTER_PNX_TEMPLATE.md)和[实现状态](IMPLEMENTATION_STATUS.md)。
 
 ## 发布包检查
 

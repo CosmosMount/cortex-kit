@@ -6,9 +6,11 @@ Cortex Kit is a new extension with its own protocol and project structure. MemRW
 flowchart LR
     VS[VS Code Debug UI] <-->|DAP over stdio| DAP[cortex-kit-dap]
     Trees[Variables / Peripherals / Session] <-->|custom DAP events| DAP
-    Plot[Plots Webview] <-->|VS Code messages| Ext[TypeScript extension]
+    Plot[Plots Webview] <-->|bounded render frames| Ext[TypeScript UI / control]
     DAP -->|port and token| Ext
-    DAP -->|binary sample batches| Ext
+    DAP -->|binary sample batches| Native[Rust native-data core]
+    Ext <-->|small control / numeric RPC| Native
+    Native -->|pixel envelopes / FFT / preview| Ext
     Ext --> Plot
     DAP --> Worker[ProbeWorker]
     Worker --> Mock[Mock backend]
@@ -17,7 +19,7 @@ flowchart LR
     Probe --> CMSIS[CMSIS-DAP / DAPLink]
 ```
 
-The `cortex-kit-core` crate owns serializable state, ELF symbol and DWARF line metadata, SVD parsing, the expression engine, read planning, bounded buffers, and FFT. `cortex-kit-probe` owns probe-rs sessions and serializes every hardware operation on one thread. `cortex-kit-dap` implements Debug Adapter Protocol framing and the independent sample server. The TypeScript extension owns VS Code commands and native trees. `webview-ui` owns chart layout and rendering.
+The `cortex-kit-core` crate owns serializable state, ELF symbol and DWARF line metadata, SVD parsing, the expression grammar, and read planning. `cortex-kit-probe` owns probe-rs sessions and serializes every hardware operation on one thread. The pinned `vendor/probe-rs` 0.31.0 fork adds CMSIS-DAP packet-aware small-block and scattered-word transactions while retaining generic fallbacks for other probes. `cortex-kit-dap` implements Debug Adapter Protocol framing, the sample server, and the separate Rust native-data mode that owns CKIT decoding, history, derived expressions, FFT, display reduction, and CSV recording. TypeScript owns VS Code lifecycle, configuration, subscriptions, native trees, and bounded RPC forwarding; it never receives raw sample batches. `webview-ui` owns layout and drawing only.
 
 Live Watch and Plot keep separate persisted variable selections. Plot dependencies form the high-rate Worker subscription; watch-only variables form a separate background subscription (20 S/s by default), even while Plot is active. Shared variables use the Plot samples without a second read. Both groups run on the same serialized Worker and emit independent real sample batches with their own measured timing. Background values are never repeated into Plot frames. Plot expressions are evaluated only on Plot batches. The native Live Watch tree separately throttles its UI refresh. With no plotted variables, the foreground subscription itself runs at the configured Live Watch rate.
 
