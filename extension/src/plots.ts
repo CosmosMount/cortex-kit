@@ -23,7 +23,7 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     // Do not serialize a full DWARF catalog on every configuration change.
     const catalog = this.catalog.filter(item => wanted.has(item.id)).map(({ id, name, expression }) => ({ id, name, expression }));
     this.native.update({ historySeconds: this.historySeconds(), charts: this.layouts.map(({ id, mode, variableIds }) => ({ id, mode, variableIds })), catalog, rawIds },
-      this.liveWatchIds, vscode.workspace.getConfiguration('cortexKit').get('liveWatchRefreshRate', 10));
+      this.liveWatchIds, vscode.workspace.getConfiguration('cortexKit').get('liveWatchRefreshRate', 20));
   }
   private async renderNative(message: Record<string, unknown>): Promise<void> {
     const requestId = message.requestId;
@@ -93,7 +93,10 @@ export class PlotViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         // Already a latest-value snapshot at the configured display rate: do
         // not add a second timer and never enqueue Plot/CSV data ahead of it.
         if (this.state && (latest.sessionId !== this.state.sessionId || latest.programGeneration !== this.state.programGeneration)) return;
-        const values: LiveWatchValue[] = latest.values.filter(item => !this.state || item.streamEpoch === this.state.streamEpoch).map(item => {
+        // Rust owns epoch consistency and clears the snapshot atomically when
+        // the target stream changes. DAP state events may arrive later, so
+        // filtering here against UI state would temporarily discard fresh data.
+        const values: LiveWatchValue[] = latest.values.map(item => {
           const timestampNs = Number(item.timestampNsExact);
           return { id: item.id, value: item.value ?? Number.NaN, source: 'stream' as const, actualSamplesPerSecond: item.actualSamplesPerSecond,
             ...(Number.isSafeInteger(timestampNs) ? { timestampNs } : {}) };

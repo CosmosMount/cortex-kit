@@ -15,7 +15,7 @@ use std::{collections::{HashMap,HashSet},io::{Read,Write},net::{TcpListener,TcpS
     sync::{Arc,Mutex,atomic::{AtomicBool,AtomicU64,AtomicUsize,Ordering}},time::{Duration,Instant}};
 
 struct LatestItem {value:f64,timestamp:u64,epoch:u64,rate:f64,received:Instant,revision:u64}
-#[derive(Default)]struct Latest {source:Option<(String,u64)>,wanted:HashSet<String>,items:HashMap<String,LatestItem>,revision:u64,connected:bool,error:Option<String>}
+#[derive(Default)]struct Latest {source:Option<(String,u64)>,epoch:Option<u64>,wanted:HashSet<String>,items:HashMap<String,LatestItem>,revision:u64,connected:bool,error:Option<String>}
 struct Shared {
     stop:AtomicBool,generation:AtomicU64,latest:Mutex<Latest>,record:Mutex<recorder::RecordState>,
     received_frames:AtomicU64,plot_dropped:AtomicU64,connection_breaks:AtomicU64,
@@ -99,16 +99,7 @@ fn input_worker(commands:Receiver<InputCommand>,plot:DataSender,shared:Arc<Share
             Ok(packets)=>for batch in packets{
                 if config.generation!=shared.generation.load(Ordering::Relaxed){continue;}
                 shared.received_frames.fetch_add(u64::from(batch.sample_count),Ordering::Relaxed);
-                {
-                    let mut latest=shared.latest.lock().unwrap();
-                    let source=(batch.session_id.clone(),batch.program_generation);
-                    if latest.source.as_ref().is_some_and(|old|old!=&source){latest.items.clear();}
-                    latest.source=Some(source);latest.revision+=1;let revision=latest.revision;let last=batch.sample_count as usize-1;
-                    for (channel,id)in batch.channel_ids.iter().enumerate(){if latest.wanted.contains(id){
-                        latest.items.insert(id.clone(),LatestItem{value:batch.values[last*batch.channel_ids.len()+channel],timestamp:batch.start_timestamp_ns+last as u64*batch.sample_period_ns,epoch:batch.stream_epoch,
-                            rate:if batch.sample_period_ns>0{1e9/batch.sample_period_ns as f64}else{0.0},received:Instant::now(),revision});
-                    }}
-                }
+                update_latest(&mut shared.latest.lock().unwrap(),&batch);
                 let data=Ingress{generation:config.generation,loss:shared.plot_dropped.load(Ordering::Relaxed)+shared.connection_breaks.load(Ordering::Relaxed),batch:Arc::new(batch)};
                 if let Some(handle)=&record{if !handle.offer(data.clone()){
                     if let Some(handle)=record.take(){shared.record.lock().unwrap().status.closing=true;finishing.push(handle.finish(None,None));}
@@ -121,6 +112,18 @@ fn input_worker(commands:Receiver<InputCommand>,plot:DataSender,shared:Arc<Share
     if let Some(handle)=record.take(){finishing.push(handle.finish(None,None));}
     for handle in finishing{let _=handle.join();}
     if let Some(done)=done{let _=done.try_send(());}
+}
+fn update_latest(latest:&mut Latest,batch:&SampleBatch){
+    let source=(batch.session_id.clone(),batch.program_generation);
+    // Epoch ownership belongs here, next to the data. DAP state notifications
+    // can trail an auto-pause/resume subscription change; never make the UI
+    // compare a fresh batch with that asynchronously delivered state.
+    if latest.source.as_ref().is_some_and(|old|old!=&source)||latest.epoch.is_some_and(|old|old!=batch.stream_epoch){latest.items.clear();}
+    latest.source=Some(source);latest.epoch=Some(batch.stream_epoch);latest.revision+=1;let revision=latest.revision;let last=batch.sample_count as usize-1;
+    for(channel,id)in batch.channel_ids.iter().enumerate(){if latest.wanted.contains(id){
+        latest.items.insert(id.clone(),LatestItem{value:batch.values[last*batch.channel_ids.len()+channel],timestamp:batch.start_timestamp_ns+last as u64*batch.sample_period_ns,epoch:batch.stream_epoch,
+            rate:if batch.sample_period_ns>0{1e9/batch.sample_period_ns as f64}else{0.0},received:Instant::now(),revision});
+    }}
 }
 fn latest(args:&Value,shared:&Shared)->Result<Value,String>{
     let ids=args.get("ids").and_then(Value::as_array).ok_or("latest.ids must be an array")?;
@@ -225,4 +228,11 @@ pub fn run()->Result<(),String>{
     fn data()->Ingress{Ingress{generation:1,loss:0,batch:Arc::new(SampleBatch{protocol_version:1,session_id:"s".into(),program_generation:1,stream_epoch:1,batch_sequence:1,channel_ids:vec!["x".into()],sample_count:1,start_timestamp_ns:0,sample_period_ns:1,dropped_frames:0,values:vec![1.0]})}}
     #[test]fn byte_budget_is_released_on_consume_and_failed_send(){let(tx,rx)=data_queue(600);let budget=tx.budget.clone();assert!(tx.offer(data()));assert!(tx.offer(data()));assert!(!tx.offer(data()));drop(rx.recv().unwrap());assert!(tx.offer(data()));drop(rx);assert!(!tx.offer(data()));drop(tx);assert_eq!(budget.load(Ordering::Relaxed),0);}
     #[test]fn latest_requests_are_bounded(){let s=Shared::default();assert!(latest(&json!({"ids":vec!["x";257]}),&s).is_err());assert!(latest(&json!({"ids":["x"]}),&s).is_ok());}
+    #[test]fn latest_epoch_change_discards_stale_values(){
+        let mut state=Latest::default();state.wanted=HashSet::from(["x".into(),"y".into()]);
+        let batch=|epoch,id:&str,value|SampleBatch{protocol_version:1,session_id:"s".into(),program_generation:1,stream_epoch:epoch,batch_sequence:epoch,
+            channel_ids:vec![id.into()],sample_count:1,start_timestamp_ns:epoch*10,sample_period_ns:1,dropped_frames:0,values:vec![value]};
+        update_latest(&mut state,&batch(1,"x",1.0));assert!(state.items.contains_key("x"));
+        update_latest(&mut state,&batch(2,"y",2.0));assert!(!state.items.contains_key("x"));assert_eq!(state.items["y"].epoch,2);
+    }
 }
