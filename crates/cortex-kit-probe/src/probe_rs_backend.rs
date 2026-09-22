@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     path::Path,
     time::Duration,
 };
@@ -18,6 +18,10 @@ const MAX_NORMAL_RAM_GAP: usize = 32;
 // probe-rs splits at the ARM MEM-AP 1 KiB auto-increment boundary. A bounded
 // 4 KiB plan avoids repeated outer calls and allocations across those chunks.
 const MAX_NORMAL_RAM_BLOCK: usize = 4096;
+// Pointer roots change far less often than their pointee data. Refresh roots at
+// an interactive cadence while continuing to sample every resolved member in
+// every frame. State-changing operations invalidate the cache immediately.
+const POINTER_ROOT_REFRESH: Duration = Duration::from_millis(100);
 
 pub fn list_probes() -> Vec<ProbeInfo> {
     Lister::new()
@@ -57,6 +61,34 @@ pub struct ProbeRsBackend {
     name: String,
     installed_breakpoints: BTreeSet<u64>,
     read_plan: Option<CachedReadPlan>,
+    pointer_cache: PointerCache,
+}
+
+#[derive(Default)]
+struct PointerCache {
+    values: HashMap<u64, Option<u64>>,
+    refreshed_at: Option<std::time::Instant>,
+}
+
+impl PointerCache {
+    fn needs_refresh(&self, addresses: &[u64], now: std::time::Instant) -> bool {
+        self.refreshed_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= POINTER_ROOT_REFRESH)
+            || addresses.iter().any(|address| !self.values.contains_key(address))
+    }
+
+    fn replace(&mut self, addresses: &[u64], values: &[u32], now: std::time::Instant) {
+        self.values.clear();
+        self.values.extend(addresses.iter().zip(values).map(|(&address, &value)| {
+            (address, (value != 0).then_some(u64::from(value)))
+        }));
+        self.refreshed_at = Some(now);
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
+        self.refreshed_at = None;
+    }
 }
 
 struct CachedReadBlock {
@@ -198,37 +230,55 @@ impl Backend for ProbeRsBackend {
     fn disconnect(&mut self) {
         self.installed_breakpoints.clear();
         self.read_plan = None;
+        self.pointer_cache.clear();
         self.session = None;
     }
     fn halt(&mut self) -> Result<(), String> {
-        self.core()?
+        let result = self.core()?
             .halt(Duration::from_millis(250))
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+        if result.is_ok() {
+            self.pointer_cache.clear();
+        }
+        result
     }
     fn resume(&mut self) -> Result<(), String> {
         let mut core = self.core()?;
         let status = core
             .status()
             .map_err(|error| format!("failed to read target state before resume: {error:?}"))?;
-        match status {
+        let result = match status {
             CoreStatus::Running | CoreStatus::Sleeping => Ok(()),
             _ => core
                 .run()
                 .map_err(|error| format!("failed to resume target from {status:?}: {error:?}")),
+        };
+        drop(core);
+        if result.is_ok() {
+            self.pointer_cache.clear();
         }
+        result
     }
     fn reset(&mut self) -> Result<(), String> {
-        self.core()?
+        let result = self.core()?
             .reset_and_halt(Duration::from_millis(500))
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+        if result.is_ok() {
+            self.pointer_cache.clear();
+        }
+        result
     }
     fn step(&mut self, _: StepKind) -> Result<(), String> {
-        self.core()?
+        let result = self.core()?
             .step()
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+        if result.is_ok() {
+            self.pointer_cache.clear();
+        }
+        result
     }
     fn set_breakpoints(&mut self, breakpoints: &[Breakpoint]) -> Result<(), String> {
         let desired: BTreeSet<u64> = breakpoints.iter().map(|item| item.address).collect();
@@ -310,7 +360,10 @@ impl Backend for ProbeRsBackend {
         // Probe implementations may batch writes. A successful `write` only
         // means the transfer was queued; `flush` guarantees it reached the
         // target before the DAP response is sent.
-        core.flush().map_err(|error| error.to_string())
+        core.flush().map_err(|error| error.to_string())?;
+        drop(core);
+        self.pointer_cache.clear();
+        Ok(())
     }
     fn flash(&mut self, path: &Path, verify: bool, reset_after: bool) -> Result<(), String> {
         let session = self
@@ -362,71 +415,69 @@ impl Backend for ProbeRsBackend {
                 .and_then(|mut core| core.reset())
                 .map_err(|error| error.to_string())?;
         }
+        self.pointer_cache.clear();
         Ok(())
     }
     fn sample(&mut self, watches: &[WatchSpec], frames: usize) -> Result<Vec<f64>, String> {
         if watches.iter().all(|watch| watch.pointer_address.is_none()) {
             return self.sample_cached(watches, frames);
         }
-        let mut core = self.core()?;
-        let mut pointer_values = HashMap::new();
-        for address in watches.iter().filter_map(|watch| watch.pointer_address) {
-            if pointer_values.contains_key(&address) { continue; }
-            let mut bytes = [0_u8; 4];
-            core.read(address, &mut bytes).map_err(|error| error.to_string())?;
-            let value = u64::from(u32::from_le_bytes(bytes));
-            pointer_values.insert(address, (value != 0).then_some(value));
-        }
-        let mut unavailable = HashSet::new();
-        let watches = watches.iter().cloned().map(|mut watch| {
-            if let Some(pointer_address) = watch.pointer_address {
-                if let Some(base) = pointer_values[&pointer_address] {
-                    watch.address = base.saturating_add(watch.pointer_offset);
-                } else {
-                    unavailable.insert(watch.id.clone());
-                }
-            }
-            watch
-        }).collect::<Vec<_>>();
-        let requests = watches
+        let pointer_addresses = watches
             .iter()
-            .filter(|watch| !unavailable.contains(&watch.id))
-            .map(|watch| ReadRequest {
-                variable_id: watch.id.clone(),
-                address: watch.address,
-                byte_width: watch.byte_width,
-                memory_class: classify_address(watch.address),
-            })
+            .filter_map(|watch| watch.pointer_address)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
-        let blocks = plan_reads(&requests, MAX_NORMAL_RAM_GAP, MAX_NORMAL_RAM_BLOCK);
-        let channels = watches
-            .iter()
-            .enumerate()
-            .map(|(index, watch)| (watch.id.as_str(), index))
-            .collect::<HashMap<_, _>>();
-        let kinds = watches
-            .iter()
-            .map(|watch| (watch.id.as_str(), watch.scalar_kind))
-            .collect::<HashMap<_, _>>();
-        let mut scratch = vec![0_u8; blocks.iter().map(|block| block.byte_len).max().unwrap_or(0)];
-        let mut output = Vec::with_capacity(watches.len() * frames);
-        for _ in 0..frames {
-            let mut frame = vec![f64::NAN; watches.len()];
-            for block in &blocks {
-                core.read(block.address, &mut scratch[..block.byte_len])
+        let now = std::time::Instant::now();
+        if self.pointer_cache.needs_refresh(&pointer_addresses, now) {
+            let mut values = vec![0_u32; pointer_addresses.len()];
+            let mut core = self.core()?;
+            if pointer_addresses.len() == 1 {
+                let mut bytes = [0_u8; 4];
+                core.read(pointer_addresses[0], &mut bytes)
                     .map_err(|error| error.to_string())?;
-                for mapping in &block.variables {
-                    let width = usize::from(mapping.byte_width.min(8));
-                    if let (Some(channel), Some(kind)) = (
-                        channels.get(mapping.variable_id.as_str()),
-                        kinds.get(mapping.variable_id.as_str()),
-                    ) {
-                        frame[*channel] =
-                            decode(&scratch[mapping.offset..mapping.offset + width], *kind);
-                    }
-                }
+                values[0] = u32::from_le_bytes(bytes);
+            } else {
+                core.read_32_scattered(&pointer_addresses, &mut values)
+                    .map_err(|error| error.to_string())?;
             }
-            output.extend(frame);
+            drop(core);
+            self.pointer_cache.replace(&pointer_addresses, &values, now);
+        }
+        let mut resolved = Vec::with_capacity(watches.len());
+        let mut channels = Vec::with_capacity(watches.len());
+        for (channel, watch) in watches.iter().enumerate() {
+            let mut watch = watch.clone();
+            if let Some(pointer_address) = watch.pointer_address {
+                let Some(base) = self
+                    .pointer_cache
+                    .values
+                    .get(&pointer_address)
+                    .copied()
+                    .flatten()
+                else {
+                    continue;
+                };
+                watch.address = base.saturating_add(watch.pointer_offset);
+                watch.pointer_address = None;
+                watch.pointer_offset = 0;
+            }
+            channels.push(channel);
+            resolved.push(watch);
+        }
+        if resolved.is_empty() {
+            return Ok(vec![f64::NAN; watches.len() * frames]);
+        }
+        let values = self.sample_cached(&resolved, frames)?;
+        if resolved.len() == watches.len() {
+            return Ok(values);
+        }
+        let mut output = vec![f64::NAN; watches.len() * frames];
+        for frame in 0..frames {
+            for (resolved_channel, &output_channel) in channels.iter().enumerate() {
+                output[frame * watches.len() + output_channel] =
+                    values[frame * resolved.len() + resolved_channel];
+            }
         }
         Ok(output)
     }
@@ -699,5 +750,24 @@ mod attach_diagnostics_tests {
                 .collect::<Vec<_>>(),
             [(0x2000_0000, 8, None), (0x2000_1000, 8, None),]
         );
+    }
+
+    #[test]
+    fn pointer_cache_refreshes_on_deadline_new_root_and_clear() {
+        let start = std::time::Instant::now();
+        let mut cache = PointerCache::default();
+        let roots = [0x2000_0000, 0x2000_1000];
+        assert!(cache.needs_refresh(&roots, start));
+        cache.replace(&roots, &[0x2000_2000, 0], start);
+        assert_eq!(cache.values[&roots[0]], Some(0x2000_2000));
+        assert_eq!(cache.values[&roots[1]], None);
+        assert!(!cache.needs_refresh(
+            &roots,
+            start + POINTER_ROOT_REFRESH - Duration::from_millis(1)
+        ));
+        assert!(cache.needs_refresh(&roots, start + POINTER_ROOT_REFRESH));
+        assert!(cache.needs_refresh(&[roots[0], 0x2000_3000], start));
+        cache.clear();
+        assert!(cache.needs_refresh(&roots, start));
     }
 }
