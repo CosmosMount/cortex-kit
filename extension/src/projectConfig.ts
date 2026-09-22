@@ -137,6 +137,7 @@ export async function configureProject(backendPath: string): Promise<void> {
   const relative = (uri?: vscode.Uri) => uri ? '${workspaceFolder}/' + vscode.workspace.asRelativePath(uri).replace(/\\/g, '/') : undefined;
   const configuration = {
     type: 'cortex-kit', request: 'launch', name: 'Cortex Kit: Flash & Debug', cwd: '${workspaceFolder}', chip: chip.trim(),
+    stopOnEntry: true, runToEntryPoint: 'main',
     ...(selectedBinary?.uri ? { programBinary: relative(selectedBinary.uri) } : {}),
     ...(selectedTask?.task ? { preLaunchTask: selectedTask.task.name } : {}),
     probe: settings.probe,

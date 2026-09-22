@@ -38,7 +38,7 @@
     "vscode:prepublish": "npm run prepare:package",
     "watch": "tsc -watch -p .",
     "test": "npm run compile && node --test out/test/*.test.js",
-    "test:dap": "node --test ../tests/mock-dap-smoke.mjs",
+    "test:dap": "npm run compile && node --test ../tests/mock-dap-smoke.mjs",
     "package": "vsce package --no-dependencies --target win32-x64 --out ../cortex-kit-win32-x64.vsix",
     "publish:marketplace": "vsce publish --no-dependencies --target win32-x64"
   },
@@ -63,6 +63,8 @@
           "chip": { "type": "string", "description": "Exact probe-rs target name" },
           "programBinary": { "type": "string", "description": "ELF, AXF, HEX, BIN or UF2 image" },
           "mockProbe": { "type": "boolean", "default": false },
+          "stopOnEntry": { "type": "boolean", "default": true, "description": "Run to the configured entry point and halt before user code continues" },
+          "runToEntryPoint": { "type": "string", "default": "main", "description": "ELF function symbol to halt at after launch" },
           "probe": {
             "type": "object",
             "properties": {
@@ -84,9 +86,9 @@
         }, "programBinary": { "type": "string" }, "plotOnly": { "type": "boolean", "default": false, "description": "Protected live plotting mode: allow pause/continue and typed Live Watch writes, but do not reset, flash, perform arbitrary memory writes, or install breakpoints" }, "svdFile": { "type": ["string", "null"] } } }
       },
       "initialConfigurations": [
-        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Mock Debug", "chip": "Cortex-M Mock", "mockProbe": true, "stopOnEntry": true, "acquisition": { "requestedSamplesPerSecond": 1000 } },
+        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Mock Debug", "chip": "Cortex-M Mock", "mockProbe": true, "stopOnEntry": true, "runToEntryPoint": "main", "acquisition": { "requestedSamplesPerSecond": 1000 } },
         { "type": "cortex-kit", "request": "attach", "name": "Cortex Kit: Live Plot (Attach)", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "plotOnly": true, "stopOnEntry": false, "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 4000, "connectUnderReset": false }, "flashing": { "enabled": false, "verify": false, "resetAfter": false }, "acquisition": { "requestedSamplesPerSecond": 1000, "historySeconds": 30 } },
-        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Flash & Debug", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 10000, "connectUnderReset": false }, "flashing": { "enabled": true, "verify": true, "resetAfter": true }, "acquisition": { "requestedSamplesPerSecond": 5000, "historySeconds": 30 } }
+        { "type": "cortex-kit", "request": "launch", "name": "Cortex Kit: Flash & Debug", "chip": "", "programBinary": "${workspaceFolder}/build/firmware.elf", "stopOnEntry": true, "runToEntryPoint": "main", "probe": { "selector": "auto", "protocol": "swd", "speedKHz": 10000, "connectUnderReset": false }, "flashing": { "enabled": true, "verify": true, "resetAfter": true }, "acquisition": { "requestedSamplesPerSecond": 5000, "historySeconds": 30 } }
       ]
     }],
     "viewsContainers": { "panel": [

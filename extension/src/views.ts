@@ -59,7 +59,11 @@ export class VariablesProvider implements vscode.TreeDataProvider<VariableNode> 
 export class LiveWatchNode extends vscode.TreeItem {
   constructor(public readonly variable: VariableDescriptor, public readonly current?: LiveWatchValue) {
     super(variable.expression, vscode.TreeItemCollapsibleState.Collapsed);
-    this.description = current?.displayValue ?? (current ? formatLiveWatchValue(current.value, variable.scalarKind) : 'Waiting for samples…');
+    const formatted = current?.displayValue ?? (current ? formatLiveWatchValue(current.value, variable.scalarKind) : 'Waiting for samples…');
+    const timestamp = current?.source === 'stream' && current.timestampNs !== undefined
+      ? ` · t=${(current.timestampNs / 1e9).toFixed(3)} s`
+      : '';
+    this.description = `${formatted}${timestamp}`;
     this.contextValue = variable.writable ? 'cortexKit.liveWatchWritable' : 'cortexKit.liveWatchReadOnly';
     this.iconPath = new vscode.ThemeIcon(current ? 'pulse' : 'eye');
     const value = current?.displayValue ?? (current ? formatLiveWatchValue(current.value, variable.scalarKind) : '<unavailable>');

@@ -138,6 +138,7 @@ async function main() {
     requestedSamplesPerSecond,
     ...customSelection,
   });
+  assert.equal(subscriptionUpdate.autoPaused, false, 'running subscription update unexpectedly paused the target');
   await dap.request('configurationDone', {});
   const collection = await collectBatches(dataReady.body, seconds);
   const { batches } = collection;
@@ -160,7 +161,7 @@ async function main() {
     const after = await dap.request('cortexKit/readValues', { ids: [candidate.id] });
     const stateAfter = await dap.request('cortexKit/getState');
     assert.equal(written.verified, true, `running write did not verify; readback was ${written.value}`);
-    assert.equal(written.autoPaused, true, 'running Live Watch write was not automatically paused');
+    assert.equal(written.autoPaused, false, 'running Live Watch write unexpectedly paused the target');
     assert.equal(after.values?.length, 1, 'could not read the value after running-state write');
     assert.ok(stateAfter.targetState === 'running' || stateAfter.targetState === 'sleeping', 'Live Watch write changed target execution state');
     runningWrite = {

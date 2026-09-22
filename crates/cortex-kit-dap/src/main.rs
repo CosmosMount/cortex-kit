@@ -12,8 +12,8 @@ use std::{
 use base64::Engine;
 use cortex_kit_core::{
     Expr, ScalarKind, SessionState, SourceIndex, TargetState, VariableDescriptor,
-    evaluate_expression, load_elf_data_symbols, load_source_index, load_svd, parse_expression,
-    resolve_instruction, resolve_source_line,
+    evaluate_expression, load_elf_data_symbols, load_elf_function_address, load_source_index,
+    load_svd, parse_expression, resolve_instruction, resolve_source_line,
 };
 use cortex_kit_probe::{
     Breakpoint, MockBackend, ProbeConfig, RegisterValue, StepKind, WatchSpec, WorkerCommand,
@@ -141,6 +141,7 @@ fn serve(worker: WorkerHandle, mock: bool) -> Result<(), String> {
     let mut reader = DapReader::new(io::stdin());
     let mut launched = false;
     let mut stop_on_entry = true;
+    let mut entry_address = None;
     let mut plot_only = false;
     let mut initialized_sent = false;
     while let Some(request) = reader.next_message().map_err(|error| error.to_string())? {
@@ -160,6 +161,7 @@ fn serve(worker: WorkerHandle, mock: bool) -> Result<(), String> {
             &arguments,
             &mut launched,
             &mut stop_on_entry,
+            &mut entry_address,
             &mut plot_only,
         );
         match response {
@@ -181,14 +183,12 @@ fn serve(worker: WorkerHandle, mock: bool) -> Result<(), String> {
                             json!({"variables":catalog.lock().unwrap().clone()}),
                         )?;
                         emit(&stdout, "cortexKit.dataChannelReady", json!(data_info))?;
-                        if stop_on_entry {
-                            emit(
-                                &stdout,
-                                "stopped",
-                                json!({"reason":"entry", "threadId":1, "allThreadsStopped":true}),
-                            )?;
-                        }
                     }
+                    "configurationDone" if stop_on_entry => emit(
+                        &stdout,
+                        "stopped",
+                        json!({"reason":"entry", "threadId":1, "allThreadsStopped":true}),
+                    )?,
                     "continue" => emit(
                         &stdout,
                         "continued",
@@ -233,6 +233,7 @@ fn handle_request(
     arguments: &Value,
     launched: &mut bool,
     stop_on_entry: &mut bool,
+    entry_address: &mut Option<u64>,
     plot_only: &mut bool,
 ) -> Result<Value, String> {
     match command {
@@ -254,6 +255,31 @@ fn handle_request(
             if chip.is_empty() {
                 return Err("chip is required for a hardware session".into());
             }
+            let requested_stop_on_entry = arguments
+                .get("stopOnEntry")
+                .and_then(Value::as_bool)
+                .unwrap_or(command == "launch");
+            let requested_entry = arguments
+                .get("runToEntryPoint")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .unwrap_or("main");
+            let resolved_entry = if command == "launch" && requested_stop_on_entry {
+                if mock {
+                    Some(0x0800_0000)
+                } else {
+                    let program = arguments
+                        .get("programBinary")
+                        .and_then(Value::as_str)
+                        .ok_or("programBinary is required to run to main")?;
+                    let address = load_elf_function_address(program, requested_entry)
+                        .map_err(|error| format!("failed to inspect entry point in {program}: {error:#}"))?
+                        .ok_or_else(|| format!("entry point '{requested_entry}' was not found in {program}"))?;
+                    Some(address)
+                }
+            } else {
+                None
+            };
             let probe = arguments.get("probe").cloned().unwrap_or(Value::Null);
             let config = parse_probe_config(chip, &probe);
             let next = expect_state(worker.call(WorkerCommand::Connect(config))?)?;
@@ -302,15 +328,31 @@ fn handle_request(
             }
             *launched = true;
             *plot_only = requested_plot_only;
-            *stop_on_entry = arguments
-                .get("stopOnEntry")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+            *stop_on_entry = requested_stop_on_entry;
+            *entry_address = resolved_entry;
             Ok(json!({}))
         }
         "configurationDone" => {
-            if *launched && !*stop_on_entry {
-                *state.lock().unwrap() = expect_state(worker.call_urgent(WorkerCommand::Resume)?)?;
+            if *launched {
+                if let Some(address) = *entry_address {
+                    // Launch semantics start from reset. Reset-and-halt first so
+                    // startup cannot pass main before the temporary breakpoint
+                    // is installed, including after a fast flash reset.
+                    *state.lock().unwrap() =
+                        expect_state(worker.call_urgent(WorkerCommand::Reset)?)?;
+                    *state.lock().unwrap() = expect_state(worker.call_urgent(
+                        WorkerCommand::RunToAddress {
+                            address,
+                            restore_breakpoints: breakpoint_list(breakpoint_sets),
+                            timeout: Duration::from_secs(10),
+                        },
+                    )?)?;
+                } else if *stop_on_entry {
+                    *state.lock().unwrap() =
+                        expect_state(worker.call_urgent(WorkerCommand::Halt)?)?;
+                } else {
+                    *state.lock().unwrap() = expect_state(worker.call_urgent(WorkerCommand::Resume)?)?;
+                }
             }
             Ok(json!({}))
         }
@@ -377,9 +419,8 @@ fn handle_request(
             };
             let variable = children.iter().find(|item| item.name == name || item.expression == name)
                 .ok_or_else(|| format!("unknown child variable: {name}"))?;
-            set_named_value_with_auto_pause(
+            set_named_value_direct(
                 worker,
-                state,
                 &catalog,
                 &variable.id,
                 arguments
@@ -390,9 +431,8 @@ fn handle_request(
         }
         "setExpression" => {
             require_debug_control(*plot_only, "expression write")?;
-            set_named_value_with_auto_pause(
+            set_named_value_direct(
                 worker,
-                state,
                 &catalog.lock().unwrap(),
                 arguments
                     .get("expression")
@@ -552,9 +592,8 @@ fn handle_request(
                 .collect::<Vec<_>>();
             read_descriptor_values(worker, selected)
         }
-        "cortexKit/writeValue" => set_named_value_with_auto_pause(
+        "cortexKit/writeValue" => set_named_value_direct(
             worker,
-            state,
             &catalog.lock().unwrap(),
             arguments
                 .get("id")
@@ -624,15 +663,13 @@ fn handle_request(
                 .unwrap_or(20)
                 .clamp(1, 1_000) as u32;
             drop(descriptors);
-            let (_, auto_paused) = with_auto_pause(worker, state, || {
-                worker.call(WorkerCommand::SetSubscriptions {
-                    watches,
-                    requested_hz,
-                    background_watches,
-                    background_hz,
-                })
+            worker.call(WorkerCommand::SetSubscriptions {
+                watches,
+                requested_hz,
+                background_watches,
+                background_hz,
             })?;
-            Ok(json!({"autoPaused":auto_paused}))
+            Ok(json!({"autoPaused":false}))
         }
         "cortexKit/flash" => {
             require_debug_control(*plot_only, "flash")?;
@@ -793,6 +830,13 @@ fn install_breakpoints(
     worker: &WorkerHandle,
     breakpoint_sets: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
 ) -> Result<(), String> {
+    worker.call(WorkerCommand::SetBreakpoints(breakpoint_list(breakpoint_sets)))?;
+    Ok(())
+}
+
+fn breakpoint_list(
+    breakpoint_sets: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
+) -> Vec<Breakpoint> {
     let mut addresses = breakpoint_sets
         .lock()
         .unwrap()
@@ -802,13 +846,10 @@ fn install_breakpoints(
         .collect::<Vec<_>>();
     addresses.sort_unstable();
     addresses.dedup();
-    worker.call(WorkerCommand::SetBreakpoints(
-        addresses
-            .into_iter()
-            .map(|address| Breakpoint { address })
-            .collect(),
-    ))?;
-    Ok(())
+    addresses
+        .into_iter()
+        .map(|address| Breakpoint { address })
+        .collect()
 }
 
 fn variables_response(catalog: &[VariableDescriptor], arguments: &Value) -> Result<Value, String> {
@@ -951,18 +992,15 @@ fn set_named_value(
     }))
 }
 
-fn set_named_value_with_auto_pause(
+fn set_named_value_direct(
     worker: &WorkerHandle,
-    state: &Arc<Mutex<SessionState>>,
     catalog: &[VariableDescriptor],
     name: &str,
     source: &str,
 ) -> Result<Value, String> {
-    let (mut response, auto_paused) = with_auto_pause(worker, state, || {
-        set_named_value(worker, catalog, name, source)
-    })?;
+    let mut response = set_named_value(worker, catalog, name, source)?;
     if let Some(object) = response.as_object_mut() {
-        object.insert("autoPaused".into(), Value::Bool(auto_paused));
+        object.insert("autoPaused".into(), Value::Bool(false));
     }
     Ok(response)
 }

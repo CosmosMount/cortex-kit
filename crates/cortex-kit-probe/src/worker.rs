@@ -72,6 +72,11 @@ pub enum WorkerCommand {
     Resume,
     Reset,
     Step(StepKind),
+    RunToAddress {
+        address: u64,
+        restore_breakpoints: Vec<Breakpoint>,
+        timeout: Duration,
+    },
     SetBreakpoints(Vec<Breakpoint>),
     ReadRegisters,
     ReadValues(Vec<WatchSpec>),
@@ -143,6 +148,45 @@ pub trait Backend: Send + 'static {
     fn reset(&mut self) -> Result<(), String>;
     fn step(&mut self, kind: StepKind) -> Result<(), String>;
     fn set_breakpoints(&mut self, breakpoints: &[Breakpoint]) -> Result<(), String>;
+    fn run_to_address(
+        &mut self,
+        address: u64,
+        restore_breakpoints: &[Breakpoint],
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let result = (|| {
+            self.set_breakpoints(&[Breakpoint { address }])?;
+            self.resume()?;
+            let deadline = Instant::now() + timeout;
+            loop {
+                match self.target_state()? {
+                    TargetState::Running | TargetState::Sleeping => {}
+                    TargetState::Halted { .. } => return Ok(()),
+                    state => {
+                        return Err(format!(
+                            "target entered {state:?} while running to 0x{address:08x}"
+                        ));
+                    }
+                }
+                if Instant::now() >= deadline {
+                    let _ = self.halt();
+                    return Err(format!("timed out running to 0x{address:08x}"));
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        })();
+        let restore = self.set_breakpoints(restore_breakpoints);
+        match (result, restore) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(format!(
+                "reached entry point, but restoring breakpoints failed: {error}"
+            )),
+            (Err(run), Err(restore)) => Err(format!(
+                "{run}; additionally, restoring breakpoints failed: {restore}"
+            )),
+        }
+    }
     fn read_registers(&mut self) -> Result<Vec<RegisterValue>, String>;
     fn read_memory(&mut self, address: u64, data: &mut [u8]) -> Result<(), String>;
     fn write_memory(&mut self, address: u64, data: &[u8]) -> Result<(), String>;
@@ -491,6 +535,21 @@ fn handle_command(
             state.revision += 1;
             WorkerReply::State(state.clone())
         }),
+        WorkerCommand::RunToAddress {
+            address,
+            restore_breakpoints,
+            timeout,
+        } => backend
+            .run_to_address(address, &restore_breakpoints, timeout)
+            .map(|()| {
+                state.target_state = TargetState::Halted {
+                    reason: "entry".into(),
+                };
+                state.stop_id += 1;
+                state.stream_epoch += 1;
+                state.revision += 1;
+                WorkerReply::State(state.clone())
+            }),
         WorkerCommand::SetBreakpoints(items) => {
             backend.set_breakpoints(&items).map(|()| WorkerReply::Ok)
         }

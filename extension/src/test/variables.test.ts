@@ -12,16 +12,22 @@ test('scoped instance fields and array members work in plot expressions', () => 
 test('same-named instances keep distinct tree identities across value refresh and select their own fields', () => {
   const modules = require('node:module');
   const original = modules._load;
-  class TreeItem { constructor(public label: string, public collapsibleState: number) {} }
+  class TreeItem { id?: string; description?: string; tooltip?: unknown; contextValue?: string; iconPath?: unknown; constructor(public label: string, public collapsibleState: number) {} }
+  class EventEmitter<T> {
+    private readonly listeners: Array<(value: T) => void> = [];
+    event = (listener: (value: T) => void) => { this.listeners.push(listener); return { dispose() {} }; };
+    fire(value: T): void { for (const listener of this.listeners) listener(value); }
+    dispose(): void { this.listeners.splice(0); }
+  }
   const vscode = {
     TreeItem, TreeItemCollapsibleState: { None: 0, Collapsed: 1 }, ThemeIcon: class {},
-    EventEmitter: class { event = () => {}; fire() {} },
+    MarkdownString: class { constructor(public value: string) {} }, EventEmitter,
   };
   modules._load = function(name: string, ...args: unknown[]) {
     return name === 'vscode' ? vscode : original.call(this, name, ...args);
   };
   try {
-    const { VariablesProvider } = require('../views');
+    const { LiveWatchProvider, VariablesProvider } = require('../views');
     const instance = (address: number): VariableDescriptor => ({
       id: `dwarf:${address}:instance`, name: 'instance', expression: 'instance', typeName: 'Motor',
       address, byteWidth: 4, scalarKind: 'unsigned', writable: true,
@@ -50,5 +56,22 @@ test('same-named instances keep distinct tree identities across value refresh an
     provider.setExpanded(second, true);
     assert.equal(provider.getVisibleScalarVariables().length, 512);
     assert.equal(provider.getVisibleScalarVariables()[0].id, child.id);
+
+    const live = new LiveWatchProvider({
+      get: () => ['mock.ramp'], update: async () => {}, keys: () => [],
+    });
+    const ramp: VariableDescriptor = { ...first.children[0], id: 'mock.ramp', expression: 'control.ramp' };
+    live.setCatalog([ramp]);
+    let refreshes = 0;
+    live.onDidChangeTreeData(() => { refreshes += 1; });
+    live.setValues([{ id: ramp.id, value: 0.25, timestampNs: 1_000_000_000, source: 'stream' }]);
+    const firstLiveDescription = String(live.getChildren()[0].description);
+    live.setValues([{ id: ramp.id, value: 0.5, timestampNs: 1_050_000_000, source: 'stream' }]);
+    const secondLiveDescription = String(live.getChildren()[0].description);
+    assert.match(firstLiveDescription, /0\.25.*t=1\.000 s/);
+    assert.match(secondLiveDescription, /0\.5.*t=1\.050 s/);
+    assert.notEqual(firstLiveDescription, secondLiveDescription);
+    assert.equal(refreshes, 2);
+    live.dispose();
   } finally { modules._load = original; }
 });

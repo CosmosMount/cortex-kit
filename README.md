@@ -20,7 +20,7 @@ code --install-extension .\cortex-kit-win32-x64.vsix
 2. 将探针连接到目标板。SWD 通常需要 GND、SWDIO、SWCLK，以及探针要求的参考电压连接；目标板需要供电。
 3. 执行 **Cortex Kit: Configure Project**，按向导选择芯片、固件和探针。芯片名使用向导中的 probe-rs 目标名，例如 STM32H723VGT6 对应已验证的 `STM32H723VG`。
 4. 手动选择 **ST-Link** 或 **DAPLink / CMSIS-DAP**，绑定扫描到的设备，选择 SWD / JTAG、调试时钟和采样频率。典型 SWD 连接可先使用 **10000 kHz** 和 **Normal connection**。
-5. 在“运行和调试”中选择 **Cortex Kit: Live Plot (Attach)**，按 **F5** 连接正在运行的固件。需要烧录时选择 **Cortex Kit: Flash & Debug**。
+5. 在“运行和调试”中选择 **Cortex Kit: Live Plot (Attach)**，按 **F5** 连接正在运行的固件。需要烧录时选择 **Cortex Kit: Flash & Debug**；该模式默认运行到 ELF 的 `main` 后停住，等待用户再次按 F5。
 6. 从 **Cortex Kit Variables** 添加变量到 **Live Watch**，在底部 **Plot** 中添加图表及变量，即可观察数据。
 
 向导会保存 `.vscode/launch.json`。再次运行 Configure Project 会替换已有 Cortex Kit 配置，保留其他调试器的配置；只修改探针或速率时，请使用下面的 Configure Probe / Sampling。
@@ -69,7 +69,7 @@ code --install-extension .\cortex-kit-win32-x64.vsix
 
 插件会在连接前从 ELF 索引全局 / 静态变量、结构体、数组和带 DWARF 指向类型的全局指针。展开结构体、数组或对象指针后，可直接通过成员旁的眼睛或曲线按钮添加单个标量；在容器节点上执行添加操作时，会先打开内部标量列表供你多选，不会默认加入整个对象。指针成员按采样批次读取当前指针值后访问；空指针显示为不可用值，不会读取地址 0。
 
-点击 Live Watch 中可写变量的铅笔按钮即可修改值。插件会按类型校验输入、暂停目标、写入并回读校验，然后恢复之前的运行状态。增加或删除采集变量也可能短暂暂停目标；仅调整图表布局不会触发暂停。
+点击 Live Watch 中可写变量的铅笔按钮即可修改值。插件会按类型校验输入，在目标运行时直接写入并回读校验，不会自动暂停。增加、删除或调整采集变量也在运行态直接生效；显式暂停、复位、烧录和断点操作仍会改变目标执行状态。
 
 Live Plot 模式允许主动暂停 / 继续和上述变量写入，禁止烧录、复位、单步、任意内存写入及安装断点。
 
@@ -98,7 +98,7 @@ CSV 为带 BOM 的 UTF-8，列为 `elapsed_s,timestamp_ns,stream_epoch,<变量..
 - **外设寄存器**：执行 **Cortex Kit: Select SVD File** 选择 CMSIS-SVD，或设置 `svdFile`。`.s` 汇编和 `.ld` 链接脚本不能代替 SVD。
 - **F7 / Cortex Kit: Build**：调用 CMake Tools 构建。先在 CMake Tools 配置工具链、预设和构建目录。
 - **F8 / Cortex Kit: Flash**：选择固件配置，执行其 `preLaunchTask`（如有），烧录后启动目标并断开；无构建任务时直接使用现有镜像。支持 ELF / AXF / OUT、HEX、BIN、UF2，非 ELF 格式仍需更广泛实机验证。
-- **F5**：启动所选配置，调试过程中继续执行。Flash & Debug 可烧录、校验并复位；F7 / F8 的构建烧录快捷键在调试期间让位于调试快捷键。
+- **F5**：启动 Flash & Debug 时先烧录、校验并复位，再运行到 `runToEntryPoint`（默认 `main`）停住；用户再次按 F5 后才继续执行。调试过程中 F5 用于继续；F7 / F8 的构建烧录快捷键让位于调试快捷键。
 - **Cortex Kit: Import Cortex-Debug Configuration**：从已有 Cortex-Debug 配置导入可识别字段，连接前检查目标、固件和探针设置。
 - **Cortex Kit: Mock Debug**：无硬件时体验模拟调试与采样。
 

@@ -200,7 +200,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   register('cortexKit.mockDebug', () => vscode.debug.startDebugging(vscode.workspace.workspaceFolders?.[0], {
     type: 'cortex-kit', request: 'launch', name: 'Cortex Kit: Mock Debug', chip: 'Cortex-M Mock', mockProbe: true,
-    stopOnEntry: true, acquisition: { requestedSamplesPerSecond: 1000 },
+    stopOnEntry: true, runToEntryPoint: 'main', acquisition: { requestedSamplesPerSecond: 1000 },
   }));
   register('cortexKit.refresh', async () => {
     if (active) {
@@ -684,10 +684,14 @@ function isHalted(state: SessionState): boolean {
 
 class ConfigurationProvider implements vscode.DebugConfigurationProvider {
   provideDebugConfigurations(): vscode.ProviderResult<vscode.DebugConfiguration[]> {
-    return [{ type: 'cortex-kit', request: 'launch', name: 'Cortex Kit: Mock Debug', chip: 'Cortex-M Mock', mockProbe: true, stopOnEntry: true, acquisition: { requestedSamplesPerSecond: 1000 } }];
+    return [{ type: 'cortex-kit', request: 'launch', name: 'Cortex Kit: Mock Debug', chip: 'Cortex-M Mock', mockProbe: true, stopOnEntry: true, runToEntryPoint: 'main', acquisition: { requestedSamplesPerSecond: 1000 } }];
   }
   resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration): vscode.ProviderResult<vscode.DebugConfiguration> {
-    if (!config.type) { return { type: 'cortex-kit', request: 'launch', name: 'Cortex Kit: Mock Debug', chip: 'Cortex-M Mock', mockProbe: true }; }
+    if (!config.type) { return { type: 'cortex-kit', request: 'launch', name: 'Cortex Kit: Mock Debug', chip: 'Cortex-M Mock', mockProbe: true, stopOnEntry: true, runToEntryPoint: 'main' }; }
+    if (config.request === 'launch') {
+      config.stopOnEntry ??= true;
+      config.runToEntryPoint ??= 'main';
+    }
     config.programBinary = expandWorkspace(config.programBinary, folder);
     config.svdFile = expandWorkspace(config.svdFile, folder);
     config.cwd = expandWorkspace(config.cwd, folder);

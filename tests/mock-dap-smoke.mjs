@@ -3,11 +3,15 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
 import test from 'node:test';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { DapClient } from './dap-client.mjs';
+import { BatchDecoder } from './sample-batch-decoder.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const executable = path.join(root, 'target', 'debug', process.platform === 'win32' ? 'cortex-kit-dap.exe' : 'cortex-kit-dap');
+const executable = process.env.CORTEX_KIT_BACKEND
+  ?? path.join(root, 'target', 'debug', process.platform === 'win32' ? 'cortex-kit-dap.exe' : 'cortex-kit-dap');
+const { NativeDataClient } = createRequire(import.meta.url)('../extension/out/nativeData.js');
 
 test('mock DAP streams and permits only typed Live Watch writes in plot-only mode', { timeout: 10_000 }, async t => {
   const child = spawn(executable, ['--mock'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -42,25 +46,39 @@ test('mock DAP streams and permits only typed Live Watch writes in plot-only mod
   const evaluated = await request('evaluate', { expression: 'signal' });
   assert.equal(evaluated.body.variablesReference, signal.variablesReference);
   t.diagnostic('data channel announced');
-  await request('cortexKit/setSubscriptions', { ids: ['mock.sine'], requestedSamplesPerSecond: 1000, backgroundIds: ['mock.sine', 'mock.ramp'], backgroundSamplesPerSecond: 20 });
-  const frame = new Promise((resolve, reject) => {
+  const initialSubscription = await request('cortexKit/setSubscriptions', { ids: ['mock.sine'], requestedSamplesPerSecond: 1000, backgroundIds: ['mock.sine', 'mock.ramp'], backgroundSamplesPerSecond: 20 });
+  assert.equal(initialSubscription.body.autoPaused, false);
+  const changingSamples = new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: '127.0.0.1', port: dataReady.body.port }, () => socket.write(`${dataReady.body.token}\n`));
-    let data = Buffer.alloc(0); const timer = setTimeout(() => { socket.destroy(); reject(new Error('sample frame timeout')); }, 3000);
-    socket.on('data', chunk => { data = Buffer.concat([data, chunk]); if (data.length >= 8 && data.length >= 4 + data.readUInt32LE(0)) { clearTimeout(timer); socket.destroy(); resolve(data.subarray(4, 8).toString('ascii')); } });
+    const decoder = new BatchDecoder(); const values = [];
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error('changing mock.ramp samples timed out')); }, 3000);
+    socket.on('data', chunk => {
+      try {
+        for (const batch of decoder.push(chunk)) {
+          const channel = batch.channelIds.indexOf('mock.ramp');
+          if (channel < 0) continue;
+          for (let sample = 0; sample < batch.sampleCount; sample += 1) values.push(batch.values[sample * batch.channelIds.length + channel]);
+          if (values.length >= 3 && new Set(values.map(value => value.toFixed(6))).size >= 2) {
+            clearTimeout(timer); socket.destroy(); resolve(values);
+          }
+        }
+      } catch (error) { clearTimeout(timer); socket.destroy(); reject(error); }
+    });
     socket.on('error', reject);
   });
   await request('configurationDone', {});
   t.diagnostic('configuration completed and target resumed');
-  assert.equal(await frame, 'CKIT');
-  t.diagnostic('sample frame received');
+  const rampSamples = await changingSamples;
+  assert.ok(rampSamples.at(-1) > rampSamples[0], 'mock.ramp did not change across streamed samples');
+  t.diagnostic(`changing mock.ramp samples received: ${rampSamples.map(value => value.toFixed(3)).join(', ')}`);
   const updatedSubscription = await request('cortexKit/setSubscriptions', { ids: ['mock.sine'], requestedSamplesPerSecond: 1000 });
-  assert.equal(updatedSubscription.body.autoPaused, true);
+  assert.equal(updatedSubscription.body.autoPaused, false);
   assert.equal((await request('cortexKit/getState', {})).body.targetState, 'running');
   const written = await request('cortexKit/writeValue', { id: 'mock.sine', value: '12.5' });
   assert.equal(written.body.value, '12.50000000');
   assert.equal(written.body.numericValue, 12.5);
   assert.equal(written.body.verified, true);
-  assert.equal(written.body.autoPaused, true);
+  assert.equal(written.body.autoPaused, false);
   assert.equal((await request('cortexKit/getState', {})).body.targetState, 'running');
   const writtenBytes = await request('readMemory', { memoryReference: '0x20000000', count: 4 });
   assert.equal(Buffer.from(writtenBytes.body.data, 'base64').readFloatLE(0), 12.5);
@@ -75,6 +93,60 @@ test('mock DAP streams and permits only typed Live Watch writes in plot-only mod
   const registers = await request('cortexKit/readRegisters', { registers: [{ id: 'mock-register', address: '0x20000010', sizeBits: 32 }] });
   assert.equal(registers.body.values.length, 1);
   await request('disconnect', {});
+});
+
+test('launch runs to main only after configuration and waits for user continue', { timeout: 10_000 }, async t => {
+  const child = spawn(executable, ['--mock'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  t.after(() => child.kill());
+  const dap = new DapClient(child);
+  await dap.request('initialize', { adapterID: 'cortex-kit' });
+  await dap.request('launch', { chip: 'Cortex-M Mock', mockProbe: true, stopOnEntry: true, runToEntryPoint: 'main', flashing: { enabled: false } });
+  await dap.waitForEvent(message => message.event === 'initialized');
+  assert.equal(dap.events.some(message => message.event === 'stopped'), false, 'adapter stopped before configurationDone');
+  await dap.request('configurationDone');
+  const stopped = await dap.waitForEvent(message => message.event === 'stopped');
+  assert.equal(stopped.body.reason, 'entry');
+  assert.deepEqual((await dap.request('cortexKit/getState')).targetState, { halted: { reason: 'entry' } });
+  await dap.request('continue', { threadId: 1 });
+  assert.equal((await dap.request('cortexKit/getState')).targetState, 'running');
+  await dap.request('disconnect');
+});
+
+test('Rust latest-value core delivers changing generic Live Watch values', { timeout: 10_000 }, async t => {
+  const child = spawn(executable, ['--mock'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const native = await NativeDataClient.launch(executable);
+  t.after(async () => { await native.close(); child.kill(); });
+  const dap = new DapClient(child);
+  await dap.request('initialize', { adapterID: 'cortex-kit' });
+  await dap.request('attach', { chip: 'Cortex-M Mock', mockProbe: true, stopOnEntry: false, plotOnly: true, flashing: { enabled: false } });
+  await dap.waitForEvent(message => message.event === 'initialized');
+  const catalog = await dap.waitForEvent(message => message.event === 'cortexKit.catalog');
+  const dataReady = await dap.waitForEvent(message => message.event === 'cortexKit.dataChannelReady');
+  await native.configure({
+    revision: 1, historySeconds: 2, charts: [],
+    catalog: [{ id: 'mock.ramp', name: 'control.ramp', expression: 'control.ramp' }], rawIds: ['mock.ramp'],
+  });
+  await native.connect({ ...dataReady.body, generation: 1 });
+  await native.latest(['mock.ramp'], 0); // Registers the latest-value interest before sampling starts.
+  await dap.request('cortexKit/setSubscriptions', { ids: ['mock.ramp'], requestedSamplesPerSecond: 1000 });
+  await dap.request('configurationDone');
+
+  let revision = 0;
+  const observed = [];
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && observed.length < 3) {
+    const latest = await native.latest(['mock.ramp'], revision);
+    revision = latest.revision;
+    if (latest.values.length) observed.push(latest.values[0]);
+    if (observed.length < 3) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(catalog.body.variables.some(variable => variable.id === 'mock.ramp'), true);
+  assert.ok(observed.length >= 3, `expected at least 3 Rust latest snapshots, got ${observed.length}`);
+  assert.ok(new Set(observed.map(item => item.value?.toFixed(6))).size >= 2, 'Rust latest snapshots repeated one frozen value');
+  for (let index = 1; index < observed.length; index += 1) {
+    assert.ok(BigInt(observed[index].timestampNsExact) > BigInt(observed[index - 1].timestampNsExact), 'Rust latest timestamp did not advance');
+  }
+  await dap.request('disconnect');
 });
 
 test('native variable writes resolve children within the expanded parent', { timeout: 10_000 }, async t => {

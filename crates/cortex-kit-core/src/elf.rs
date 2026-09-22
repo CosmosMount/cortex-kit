@@ -82,6 +82,26 @@ pub fn load_elf_data_symbols(path: impl AsRef<Path>) -> Result<Vec<VariableDescr
     Ok(variables)
 }
 
+/// Resolve an executable symbol directly from an ELF/AXF image. Cortex-M
+/// toolchains may set the low Thumb bit, while hardware breakpoints use the
+/// aligned instruction address.
+pub fn load_elf_function_address(path: impl AsRef<Path>, name: &str) -> Result<Option<u64>> {
+    let path = path.as_ref();
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let file = object::File::parse(bytes.as_slice()).context("parse ELF/AXF object")?;
+    let find = |symbol: object::Symbol<'_, '_>| {
+        (symbol.kind() == SymbolKind::Text
+            && !symbol.is_undefined()
+            && symbol.address() != 0
+            && symbol.name().ok() == Some(name))
+        .then_some(symbol.address() & !1)
+    };
+    Ok(file
+        .symbols()
+        .find_map(find)
+        .or_else(|| file.dynamic_symbols().find_map(find)))
+}
+
 fn data_symbols(file: &object::File<'_>) -> Vec<SymbolRecord> {
     let mut symbols = Vec::new();
     for symbol in file.symbols() {

@@ -31,6 +31,7 @@ test('Cortex-Debug launch fields migrate without OpenOCD dependencies', () => {
     chip: 'STM32H723VG', programBinary: '${workspaceFolder}/build/app.elf', svdFile: null,
     probe: { selector: 'auto', protocol: 'swd', speedKHz: 10000, connectUnderReset: false },
     flashing: { enabled: true, verify: true, resetAfter: true },
+    stopOnEntry: true, runToEntryPoint: 'main',
     acquisition: { requestedSamplesPerSecond: 5000, historySeconds: 30 },
   });
 });

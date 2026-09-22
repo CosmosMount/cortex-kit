@@ -412,7 +412,8 @@ impl Backend for ProbeRsBackend {
         if reset_after {
             session
                 .core(0)
-                .and_then(|mut core| core.reset())
+                .and_then(|mut core| core.reset_and_halt(Duration::from_millis(500)))
+                .map(|_| ())
                 .map_err(|error| error.to_string())?;
         }
         self.pointer_cache.clear();

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, time::Duration};
 
 use cortex_kit_core::{ScalarKind, VariableDescriptor};
 
@@ -61,6 +61,10 @@ impl Backend for MockBackend {
         Ok(())
     }
     fn set_breakpoints(&mut self, _: &[Breakpoint]) -> Result<(), String> {
+        Ok(())
+    }
+    fn run_to_address(&mut self, _: u64, _: &[Breakpoint], _: Duration) -> Result<(), String> {
+        self.running = false;
         Ok(())
     }
     fn read_registers(&mut self) -> Result<Vec<RegisterValue>, String> {
