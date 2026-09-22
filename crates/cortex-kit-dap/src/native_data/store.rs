@@ -33,14 +33,16 @@ pub struct Viewport {pub id:String,pub columns:usize}
 pub struct RenderRequest {pub generation:u64,pub config_revision:u64,pub charts:Vec<Viewport>}
 pub enum Command {Configure(Config),Clear(u64),Render(RenderRequest,Sender<Result<Value,String>>)}
 struct Binding {ids:Vec<String>,expressions:Vec<Option<Bound>>}
-struct Spectrum {revision:u64,segment:u64,at:Instant,values:Vec<f64>,max_hz:f64}
+struct Spectrum {revision:u64,segment:u64,at:Instant,values:Vec<f64>,max_hz:f64,cached:Option<(usize,Value)>}
+const FFTS_PER_RENDER:usize=8;
 struct Store {
     config:Option<Config>, raw_ids:HashSet<String>, histories:HashMap<String,History>,
     expressions:Vec<(String,Program)>, bindings:Vec<Binding>, spectra:HashMap<String,Spectrum>, fft:Fft,
+    chart_indices:HashMap<String,usize>,fft_cursor:usize,
     source:Option<(u64,String,u64)>, last_loss:u64,last_dropped:u64,revision:u64,errors:Vec<String>,
 }
 impl Store {
-    fn new()->Self{Self{config:None,raw_ids:HashSet::new(),histories:HashMap::new(),expressions:Vec::new(),bindings:Vec::new(),spectra:HashMap::new(),fft:Fft::default(),source:None,last_loss:0,last_dropped:0,revision:0,errors:Vec::new()}}
+    fn new()->Self{Self{config:None,raw_ids:HashSet::new(),histories:HashMap::new(),expressions:Vec::new(),bindings:Vec::new(),spectra:HashMap::new(),fft:Fft::default(),chart_indices:HashMap::new(),fft_cursor:0,source:None,last_loss:0,last_dropped:0,revision:0,errors:Vec::new()}}
     fn configure(&mut self,c:Config){
         self.errors.clear();self.expressions.clear();self.bindings.clear();self.spectra.clear();
         let wanted:HashSet<_>=c.charts.iter().flat_map(|chart|chart.variable_ids.iter().cloned()).collect();
@@ -55,7 +57,8 @@ impl Store {
         for d in &c.catalog {if d.id.starts_with("expr:")&&wanted.contains(&d.id){
             match Program::compile(&d.expression){Ok(p)=>self.expressions.push((d.id.clone(),p)),Err(e)=>self.errors.push(format!("{}: {e}",d.id))}
         }}
-        self.raw_ids=c.raw_ids.iter().cloned().collect();self.config=Some(c);self.revision+=1;
+        self.chart_indices=c.charts.iter().enumerate().map(|(index,chart)|(chart.id.clone(),index)).collect();
+        self.fft_cursor=0;self.raw_ids=c.raw_ids.iter().cloned().collect();self.config=Some(c);self.revision+=1;
     }
     fn clear(&mut self){
         self.histories.clear();self.spectra.clear();self.bindings.clear();self.source=None;self.last_loss=0;self.last_dropped=0;
@@ -96,25 +99,47 @@ impl Store {
         for h in self.histories.values_mut(){if let Some(last)=h.last(){h.trim(last.t.saturating_sub((seconds*1e9) as u64));}}
         self.revision+=1;
     }
+    fn refresh_spectra(&mut self,ids:&[String]){
+        if ids.is_empty(){return;}
+        let start=self.fft_cursor%ids.len();let (mut visited,mut refreshed)=(0,0);
+        while visited<ids.len()&&refreshed<FFTS_PER_RENDER {
+            let id=&ids[(start+visited)%ids.len()];visited+=1;
+            let Some(h)=self.histories.get(id)else{self.spectra.remove(id);continue;};
+            let Some(last)=h.last().filter(|p|p.value.is_finite())else{self.spectra.remove(id);continue;};
+            let needs=self.spectra.get(id).is_none_or(|old|old.segment!=last.segment||(old.revision!=h.revision&&old.at.elapsed()>=Duration::from_millis(100)));
+            if !needs{continue;} refreshed+=1;
+            if let Some((values,period,segment))=h.fft_input(){
+                let result=self.fft.compute(&values);let max_hz=(result.len()-1) as f64/(values.len() as f64*period);
+                self.spectra.insert(id.clone(),Spectrum{revision:h.revision,segment,at:Instant::now(),values:result,max_hz,cached:None});
+            }else{self.spectra.remove(id);}
+        }
+        self.fft_cursor=(start+visited)%ids.len();
+    }
     fn render(&mut self,request:RenderRequest,shared:&Shared)->Result<Value,String>{
         let generation=shared.generation.load(std::sync::atomic::Ordering::Relaxed);
         if request.generation!=generation || self.source.as_ref().is_some_and(|s|s.0!=generation){return Err("stale display generation".into());}
-        let Some(config)=self.config.clone()else{return Err("display has not been configured".into());};
-        if request.config_revision!=config.revision{return Err("stale display configuration".into());}
         if request.charts.len()>32{return Err("too many viewports".into());}
-        let by_id=config.charts.iter().map(|c|(c.id.as_str(),c)).collect::<HashMap<_,_>>();
-        let mut seen=HashSet::new();let mut weights=0usize;
-        for view in &request.charts {let c=by_id.get(view.id.as_str()).ok_or("unknown chart")?;
-            if !seen.insert(&view.id){return Err("duplicate viewport".into());}
-            weights+=c.variable_ids.len()*if c.mode=="both"{2}else{1};
-        }
+        let (config_revision,history_seconds,chart_indices,weights,fft_ids)={
+            let Some(config)=self.config.as_ref()else{return Err("display has not been configured".into());};
+            if request.config_revision!=config.revision{return Err("stale display configuration".into());}
+            let mut seen=HashSet::new();let mut weights=0usize;let mut chart_indices=Vec::with_capacity(request.charts.len());
+            let mut fft_seen=HashSet::new();let mut fft_ids=Vec::new();
+            for view in &request.charts {
+                let index=*self.chart_indices.get(&view.id).ok_or("unknown chart")?;let chart=&config.charts[index];
+                if !seen.insert(&view.id){return Err("duplicate viewport".into());}
+                weights+=chart.variable_ids.len()*if chart.mode=="both"{2}else{1};chart_indices.push(index);
+                if chart.mode!="time"{for id in &chart.variable_ids{if fft_seen.insert(id){fft_ids.push(id.clone());}}}
+            }
+            (config.revision,config.history_seconds,chart_indices,weights,fft_ids)
+        };
+        self.refresh_spectra(&fft_ids);
         let max_columns=(16384/weights.max(1)).clamp(1,4096);
         let mut charts=Vec::new();let mut clamped=false;
-        for view in request.charts {
-            let chart=by_id[view.id.as_str()];let columns=view.columns.clamp(1,4096).min(max_columns);
+        for (view,chart_index) in request.charts.into_iter().zip(chart_indices) {
+            let chart=&self.config.as_ref().unwrap().charts[chart_index];let columns=view.columns.clamp(1,4096).min(max_columns);
             clamped|=columns<view.columns;
             let newest=chart.variable_ids.iter().filter_map(|id|self.histories.get(id)?.last().map(|p|p.t)).max().unwrap_or(0);
-            let start=newest as i128-(config.history_seconds*1e9) as i128;
+            let start=newest as i128-(history_seconds*1e9) as i128;
             let mut series=Vec::new();
             for id in &chart.variable_ids {
                 let Some(h)=self.histories.get(id)else{continue;};
@@ -122,12 +147,12 @@ impl Store {
                 let mut spectrum=None;
                 if chart.mode!="time" {
                     if let Some(last)=h.last().filter(|p|p.value.is_finite()) {
-                        let needs=self.spectra.get(id).is_none_or(|old|old.segment!=last.segment||(old.revision!=h.revision&&old.at.elapsed()>=Duration::from_millis(100)));
-                        if needs {if let Some((values,period,segment))=h.fft_input(){
-                            let result=self.fft.compute(&values);let max_hz=(result.len()-1) as f64/(values.len() as f64*period);
-                            self.spectra.insert(id.clone(),Spectrum{revision:h.revision,segment,at:Instant::now(),values:result,max_hz});
-                        }else{self.spectra.remove(id);}}
-                        if let Some(s)=self.spectra.get(id).filter(|s|s.segment==last.segment){spectrum=Some(json!({"maxHz":s.max_hz,"envelope":fft::envelope(&s.values,columns)}));}
+                        if let Some(s)=self.spectra.get_mut(id).filter(|s|s.segment==last.segment){
+                            if s.cached.as_ref().is_none_or(|(width,_)|*width!=columns){
+                                s.cached=Some((columns,json!({"maxHz":s.max_hz,"envelope":fft::envelope(&s.values,columns)})));
+                            }
+                            spectrum=s.cached.as_ref().map(|(_,value)|value.clone());
+                        }
                     }else{self.spectra.remove(id);}
                 }
                 series.push(json!({"id":id,"time":time,"fft":spectrum,"count":h.len()}));
@@ -137,7 +162,7 @@ impl Store {
         let evicted:u64=self.histories.values().map(|h|h.evicted).sum();
         let rejected:u64=self.histories.values().map(|h|h.rejected).sum();
         if generation!=shared.generation.load(std::sync::atomic::Ordering::Relaxed){return Err("session changed during render".into());}
-        Ok(json!({"generation":generation,"configRevision":config.revision,"revision":self.revision,
+        Ok(json!({"generation":generation,"configRevision":config_revision,"revision":self.revision,
             "sessionId":self.source.as_ref().map(|s|&s.1),"programGeneration":self.source.as_ref().map(|s|s.2),
             "charts":charts,"resolutionClamped":clamped,"historyEvictions":evicted,"rejectedTimestamps":rejected,
             "displayDroppedFrames":shared.plot_dropped.load(std::sync::atomic::Ordering::Relaxed),"errors":self.errors}))
@@ -174,5 +199,22 @@ pub fn run(commands:Receiver<Command>,input:Receiver<Queued>,shared:Arc<Shared>)
         assert!(store.render(RenderRequest{generation:2,config_revision:2,charts:vec![]},&shared).is_err());
         assert!(store.render(RenderRequest{generation:2,config_revision:3,charts:vec![]},&shared).is_ok());
     }
-
+    #[test] fn fft_refresh_is_bounded_fair_and_reuses_reduction() {
+        let ids=(0..25).map(|i|format!("x{i}")).collect::<Vec<_>>();
+        let catalog=ids.iter().map(|id|Descriptor{id:id.clone(),name:id.clone(),expression:id.clone()}).collect();
+        let mut store=Store::new();store.configure(Config{revision:1,history_seconds:30.0,
+            charts:vec![Chart{id:"fft".into(),mode:"both".into(),variable_ids:ids.clone()}],catalog,raw_ids:ids.clone()});
+        let mut values=Vec::new();for sample in 0..64{for channel in 0..ids.len(){values.push((sample+channel) as f64);}}
+        store.ingest(&Ingress{generation:1,loss:0,batch:Arc::new(cortex_kit_core::SampleBatch{
+            protocol_version:1,session_id:"s".into(),program_generation:1,stream_epoch:1,batch_sequence:1,
+            channel_ids:ids,sample_count:64,start_timestamp_ns:0,sample_period_ns:1_000_000,dropped_frames:0,values})});
+        let shared=Shared::default();shared.generation.store(1,std::sync::atomic::Ordering::Relaxed);
+        let request=||RenderRequest{generation:1,config_revision:1,charts:vec![Viewport{id:"fft".into(),columns:64}]};
+        let first=store.render(request(),&shared).unwrap();assert_eq!(store.spectra.len(),FFTS_PER_RENDER);
+        assert_eq!(first["charts"][0]["series"].as_array().unwrap().iter().filter(|s|!s["fft"].is_null()).count(),FFTS_PER_RENDER);
+        for _ in 0..3{store.render(request(),&shared).unwrap();} assert_eq!(store.spectra.len(),25);
+        assert!(store.spectra.values().all(|s|s.cached.as_ref().is_some_and(|(width,_)|*width==64)));
+        store.render(RenderRequest{generation:1,config_revision:1,charts:vec![Viewport{id:"fft".into(),columns:32}]},&shared).unwrap();
+        assert!(store.spectra.values().all(|s|s.cached.as_ref().is_some_and(|(width,_)|*width==32)));
+    }
 }
