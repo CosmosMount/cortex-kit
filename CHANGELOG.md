@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.3 — 2026-09-22
+
+- 修复 Live Watch 连续采样时界面停留在首次刷新值的问题：VS Code 对树刷新事件执行 200 ms 防抖，原先 20 Hz 的连续事件会让后续重绘一直等待。现在保留每份 Rust 最新快照，将树重绘通知合并到 250 ms 间隔；不改变探针采样率。
+- Live Watch 节点使用稳定的变量 ID，展开详情读取当前快照。
+- 新增真实 VS Code Extension Host 回归测试：连续更新 2.5 秒，旧事件策略仅重绘 1 次，修复后重绘 10 次，显示值和时间戳持续变化。原有 Provider 测试不覆盖 VS Code 的防抖行为。
+
 ## 1.2.2 — 2026-09-22
 
 - Live Watch 行现在显示 Rust 最新值快照的目标时间戳；新增与具体固件无关的 `mock.ramp` 全链路测试，验证二进制采样、Rust latest 核心和 UI 刷新接收到持续变化的数值，而非仅验证帧到达或时间戳新鲜度。
@@ -8,7 +14,7 @@
 
 ### 验证
 
-- 通用 `mock.ramp` 经 DAP 二进制流、Rust latest 核心和 Live Watch UI 连续返回变化值与递增时间戳。
+- 通用 `mock.ramp` 经 DAP 二进制流和 Rust latest 核心连续返回变化值与递增时间戳；该版本的 Provider 测试未覆盖 VS Code 实际树重绘，相关缺陷在 1.2.3 修复。
 - 使用 Horco CMSIS-DAP 在 `robomaster/pnx_template` 实机烧录并校验，随后在 583.75 ms 内停在 `main.c:75`（`0x0801238c`），Continue 后恢复运行。
 - 排除未工作的 IMU 数据，改用 ThreadX `_tx_timer_system_clock` 验证真实变化：3 秒内 `33065 → 36055`、1230 个样本、零丢帧；订阅更新和同值回写均未暂停目标。
 

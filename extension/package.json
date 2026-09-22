@@ -2,7 +2,7 @@
   "name": "cortex-kit",
   "displayName": "Cortex Kit",
   "description": "Native Cortex-M debugging, peripheral inspection, plotting and FFT through probe-rs.",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "publisher": "CosmosMount",
   "license": "MIT",
   "repository": {
@@ -39,6 +39,7 @@
     "watch": "tsc -watch -p .",
     "test": "npm run compile && node --test out/test/*.test.js",
     "test:dap": "npm run compile && node --test ../tests/mock-dap-smoke.mjs",
+    "test:live-watch-host": "npm run compile && node ../tests/run-live-watch-host.mjs",
     "package": "vsce package --no-dependencies --target win32-x64 --out ../cortex-kit-win32-x64.vsix",
     "publish:marketplace": "vsce publish --no-dependencies --target win32-x64"
   },
@@ -163,7 +164,7 @@
         "cortexKit.backendPath": { "type": "string", "default": "", "description": "Optional path to cortex-kit-dap executable" },
         "cortexKit.chartRefreshRate": { "type": "number", "default": 30, "minimum": 1, "maximum": 60 },
         "cortexKit.liveWatchSamplesPerSecond": { "type": "number", "default": 20, "minimum": 1, "maximum": 1000, "description": "Requested sample rate for Live Watch-only variables, independent of Plot sampling; shared variables use Plot samples" },
-        "cortexKit.liveWatchRefreshRate": { "type": "number", "default": 20, "minimum": 1, "maximum": 30, "description": "Maximum Live Watch tree refresh rate in frames per second; values are pulled from the Rust snapshot without extra probe reads" },
+        "cortexKit.liveWatchRefreshRate": { "type": "number", "default": 20, "minimum": 1, "maximum": 30, "description": "Rust latest-value snapshot polling rate; the Live Watch tree redraws at up to 4 Hz to avoid VS Code tree debounce starvation. Does not add probe reads." },
         "cortexKit.historySeconds": { "type": "number", "scope": "resource", "default": 30, "minimum": 1, "maximum": 600, "description": "Plot rolling time window and chart retention in seconds. Also selectable in the Plot header; does not change sampling rate or CSV recording duration." }
       }
     }

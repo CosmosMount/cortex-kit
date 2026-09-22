@@ -9,7 +9,8 @@ test('scoped instance fields and array members work in plot expressions', () => 
   assert.deepEqual(expressionDependencies(`${name} * 2`), [name]);
 });
 
-test('same-named instances keep distinct tree identities across value refresh and select their own fields', () => {
+test('same-named instances keep distinct tree identities across value refresh and select their own fields', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const modules = require('node:module');
   const original = modules._load;
   class TreeItem { id?: string; description?: string; tooltip?: unknown; contextValue?: string; iconPath?: unknown; constructor(public label: string, public collapsibleState: number) {} }
@@ -71,7 +72,17 @@ test('same-named instances keep distinct tree identities across value refresh an
     assert.match(firstLiveDescription, /0\.25.*t=1\.000 s/);
     assert.match(secondLiveDescription, /0\.5.*t=1\.050 s/);
     assert.notEqual(firstLiveDescription, secondLiveDescription);
-    assert.equal(refreshes, 2);
+    assert.equal(refreshes, 0, 'updates coalesce behind the initial catalog refresh');
+    t.mock.timers.tick(250);
+    assert.equal(refreshes, 1);
+    assert.equal(live.getChildren()[0].id, ramp.id);
+    for (let index = 0; index < 20; index++) {
+      live.setValues([{ id: ramp.id, value: index, source: 'stream' }]);
+      t.mock.timers.tick(50);
+    }
+    assert.equal(refreshes, 5, 'continuous samples must not postpone refresh indefinitely');
     live.dispose();
+    t.mock.timers.tick(1000);
+    assert.equal(refreshes, 5, 'disposing cancels pending refresh');
   } finally { modules._load = original; }
 });

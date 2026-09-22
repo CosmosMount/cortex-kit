@@ -3,7 +3,7 @@
 ## 当前发布目标
 
 - 扩展 ID：`CosmosMount.cortex-kit`
-- 扩展版本：`1.2.2`
+- 扩展版本：`1.2.3`
 - 平台：`win32-x64`；包含 Windows x64 Rust 后端，不作为跨平台包发布。
 - 产物：仓库根目录 `cortex-kit-win32-x64.vsix`
 - 许可证：根目录 `LICENSE`，扩展 manifest 与 Rust crates 均声明 MIT；`THIRD_PARTY_LICENSES.md` 和 `vendor/probe-rs/LICENSE-MIT` 记录受控 probe-rs fork 的上游版本与许可证。
@@ -23,10 +23,13 @@ cd extension
 npm ci
 npm test
 npm run test:dap
+npm run test:live-watch-host -- "D:\Apps\Microsoft VS Code\Code.exe"
 npm run package
 ```
 
 `npm run package` 会编译 TypeScript、构建 release 后端、复制 Webview、README、CHANGELOG 和 LICENSE，再生成 VSIX。扩展没有 npm 运行时依赖，打包使用 `--no-dependencies`；新增运行时依赖时须相应修改打包策略。
+
+`test:live-watch-host` 的参数需替换成本机 VS Code 可执行文件（不是 `code.cmd`）。该测试启动隔离窗口，在持续输入下比较旧刷新策略与当前 Live Watch 的实际树重绘次数，避免仅靠 Provider 单元测试漏掉 VS Code 的 200 ms 防抖。测试配置与日志保存在 `.agents/docs/`。
 
 开发时打开仓库按 F5 启动 Extension Development Host，使用 **Cortex Kit: Mock Debug** 验证无硬件路径。瞬态硬件测试脚本、日志和压力测试证据统一保存在被 Git 忽略的 `.agents/docs/`，不得加入公开发布包。
 

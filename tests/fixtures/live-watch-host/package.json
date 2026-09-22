@@ -1,0 +1,9 @@
+{
+  "name": "live-watch-refresh-test",
+  "publisher": "cortex-kit-tests",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.96.0" },
+  "contributes": {
+    "views": { "explorer": [{ "id": "cortexKit.refreshRegression", "name": "Live Watch Refresh Regression" }] }
+  }
+}

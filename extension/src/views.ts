@@ -59,6 +59,7 @@ export class VariablesProvider implements vscode.TreeDataProvider<VariableNode> 
 export class LiveWatchNode extends vscode.TreeItem {
   constructor(public readonly variable: VariableDescriptor, public readonly current?: LiveWatchValue) {
     super(variable.expression, vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = variable.id;
     const formatted = current?.displayValue ?? (current ? formatLiveWatchValue(current.value, variable.scalarKind) : 'Waiting for samples…');
     const timestamp = current?.source === 'stream' && current.timestampNs !== undefined
       ? ` · t=${(current.timestampNs / 1e9).toFixed(3)} s`
@@ -90,11 +91,28 @@ export class LiveWatchProvider implements vscode.TreeDataProvider<LiveWatchItem>
   private readonly pendingWrites = new Map<string, { timer: NodeJS.Timeout; latest?: LiveWatchValue }>();
   private readonly selectedIds: string[];
   private catalog = new Map<string, VariableDescriptor>();
+  private refreshTimer?: NodeJS.Timeout;
+  private refreshPending = false;
+
+  private refresh(): void {
+    this.refreshPending = true;
+    if (this.refreshTimer) { return; }
+    // VS Code debounces tree events for 200 ms (leading + trailing). Sending
+    // events faster indefinitely postpones every refresh after the first one.
+    // Store every Rust snapshot, but leave time for the tree debounce to flush.
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      if (this.refreshPending) { this.refresh(); }
+    }, 250);
+    this.refreshPending = false;
+    this.changed.fire();
+  }
 
   constructor(private readonly workspaceState: vscode.Memento) {
     this.selectedIds = [...new Set(workspaceState.get<string[]>('cortexKit.liveWatch', []))];
   }
   dispose(): void {
+    if (this.refreshTimer) { clearTimeout(this.refreshTimer); }
     for (const pending of this.pendingWrites.values()) { clearTimeout(pending.timer); }
     this.pendingWrites.clear();
     this.changed.dispose();
@@ -102,7 +120,7 @@ export class LiveWatchProvider implements vscode.TreeDataProvider<LiveWatchItem>
   }
   setCatalog(variables: VariableDescriptor[]): void {
     this.catalog = new Map(flattenLiveWatchCatalog(variables).map(variable => [variable.id, variable]));
-    this.changed.fire();
+    this.refresh();
   }
   getSelectedIds(): string[] { return [...this.selectedIds]; }
   getSelectedVariables(): VariableDescriptor[] {
@@ -141,7 +159,7 @@ export class LiveWatchProvider implements vscode.TreeDataProvider<LiveWatchItem>
       this.values.set(value.id, value);
       changed = true;
     }
-    if (changed) { this.changed.fire(); }
+    if (changed) { this.refresh(); }
   }
   setWrittenValue(id: string, value: number, displayValue: string, holdMs = 500): void {
     if (!this.selectedIds.includes(id)) { return; }
@@ -151,19 +169,19 @@ export class LiveWatchProvider implements vscode.TreeDataProvider<LiveWatchItem>
       timer: setTimeout(() => {
         this.pendingWrites.delete(id);
         if (pending.latest) { this.values.set(id, pending.latest); }
-        this.changed.fire();
+        this.refresh();
       }, holdMs),
     };
     this.pendingWrites.set(id, pending);
-    this.changed.fire();
+    this.refresh();
   }
   clearValues(): void {
     for (const id of this.pendingWrites.keys()) { this.clearPendingWrite(id); }
-    if (this.values.size) { this.values.clear(); this.changed.fire(); }
+    if (this.values.size) { this.values.clear(); this.refresh(); }
   }
   getTreeItem(item: LiveWatchItem): vscode.TreeItem { return item; }
   getChildren(parent?: LiveWatchItem): LiveWatchItem[] {
-    if (parent instanceof LiveWatchNode) { return liveWatchDetails(parent.variable, parent.current); }
+    if (parent instanceof LiveWatchNode) { return liveWatchDetails(parent.variable, this.values.get(parent.variable.id)); }
     if (parent) { return []; }
     if (!this.selectedIds.length) { return [liveWatchMessage('Use + to add variables')]; }
     const nodes: LiveWatchItem[] = this.getSelectedVariables().map(variable => new LiveWatchNode(variable, this.values.get(variable.id)));
@@ -173,7 +191,7 @@ export class LiveWatchProvider implements vscode.TreeDataProvider<LiveWatchItem>
   }
   private async persist(): Promise<void> {
     await this.workspaceState.update('cortexKit.liveWatch', this.selectedIds);
-    this.changed.fire();
+    this.refresh();
     this.selectionChanged.fire(this.getSelectedIds());
   }
   private clearPendingWrite(id: string): void {
